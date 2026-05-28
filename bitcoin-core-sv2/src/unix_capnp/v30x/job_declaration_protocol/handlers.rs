@@ -1,9 +1,10 @@
-//! Handlers for Job Declaration Protocol messages.
+//! Handlers for Bitcoin Core v30.x Sv2 Job Declaration Protocol via capnp over UNIX socket.
 
-use crate::job_declaration_protocol::{
-    BitcoinCoreSv2JDP,
-    io::{JdResponse, ValidationContext},
-    mempool::decode_bip34_height_from_coinbase_script_sig,
+use crate::{
+    common::job_declaration_protocol::io::{JdResponse, ValidationContext},
+    unix_capnp::v30x::job_declaration_protocol::{
+        BitcoinCoreSv2JDP, mempool::decode_bip34_height_from_coinbase_script_sig,
+    },
 };
 use stratum_core::{
     bitcoin::{
@@ -23,9 +24,9 @@ impl BitcoinCoreSv2JDP {
     /// Validates a declared mining job by checking transaction availability and block structure.
     ///
     /// Adds missing transactions to the mempool mirror, verifies all transactions are available,
-    /// assembles a test block, sets IPC thread context, and uses Bitcoin Core's `checkBlock` to
-    /// validate the block structure. Returns success with current template parameters or an error
-    /// if validation fails.
+    /// assembles a test block, and uses Bitcoin Core's `checkBlock` to validate the block
+    /// structure. Returns success with current template parameters or an error if validation
+    /// fails.
     pub(crate) async fn handle_declare_mining_job(
         &self,
         version: Version,
@@ -145,26 +146,11 @@ impl BitcoinCoreSv2JDP {
             );
 
             let mut check_block_request = self.mining_ipc_client.check_block_request();
+            let mut check_block_params = check_block_request.get();
 
-            match check_block_request.get().get_context() {
-                Ok(mut context) => context.set_thread(self.thread_ipc_client.clone()),
-                Err(e) => {
-                    tracing::error!("Failed to set check block request thread context: {e}");
-                    // send error response to the client
-                    // deliberately ignore potential send errors
-                    let _ = response_tx.send(JdResponse::Error {
-                        error_code: ERROR_CODE_DECLARE_MINING_JOB_INTERNAL_ERROR,
-                        validation_context: initial_validation_context,
-                    });
-                    tracing::warn!("Terminating Sv2 Bitcoin Core IPC Connection");
-                    self.cancellation_token.cancel();
-                    return;
-                }
-            }
+            check_block_params.set_block(&block_bytes);
 
-            check_block_request.get().set_block(&block_bytes);
-
-            let mut options = match check_block_request.get().get_options() {
+            let mut options = match check_block_params.get_options() {
                 Ok(options) => options,
                 Err(e) => {
                     tracing::error!("Failed to get check block options: {e}");

@@ -14,7 +14,7 @@
 //! `BitcoinCoreSv2TDP` will not start distributing new templates until it receives the first
 //! `CoinbaseOutputConstraints` message.
 
-use bitcoin_core_sv2::template_distribution_protocol::BitcoinCoreSv2TDP;
+use bitcoin_core_sv2::unix_capnp::v30x::template_distribution_protocol::BitcoinCoreSv2TDP;
 use std::path::Path;
 
 use async_channel::unbounded;

@@ -1,6 +1,8 @@
-//! Background monitor tasks for the Bitcoin Core IPC connection.
+//! Background monitors for Bitcoin Core v31.x Sv2 Job Declaration Protocol via capnp over UNIX
+//! socket.
 
-use crate::job_declaration_protocol::BitcoinCoreSv2JDP;
+use crate::unix_capnp::v31x::job_declaration_protocol::BitcoinCoreSv2JDP;
+use bitcoin_capnp_types_v31::capnp;
 use tokio::task::JoinHandle;
 
 impl BitcoinCoreSv2JDP {

@@ -4,8 +4,10 @@
 use std::{collections::HashSet, net::IpAddr, time::Duration};
 
 use stratum_apps::{
-    monitoring::sv1::{Sv1ClientInfo, Sv1ClientsMonitoring},
-    monitoring::{MinerTelemetry, MinerTelemetryCollector},
+    monitoring::{
+        sv1::{Sv1ClientInfo, Sv1ClientsMonitoring},
+        MinerTelemetry, MinerTelemetryCollector,
+    },
     utils::types::DownstreamId,
 };
 use tokio_util::sync::CancellationToken;

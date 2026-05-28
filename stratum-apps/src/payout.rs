@@ -17,8 +17,8 @@ use crate::{
 ///
 /// Supported patterns:
 /// - `sri/solo/<payout_address>/<worker_name>`: full reward goes to the miner.
-/// - `<payout_address>` or `<payout_address>.<worker_name>`: legacy solo mode, full reward goes
-///   to the miner.
+/// - `<payout_address>` or `<payout_address>.<worker_name>`: legacy solo mode, full reward goes to
+///   the miner.
 /// - `sri/donate/<percentage>/<payout_address>/<worker_name>`: pool receives `percentage`, miner
 ///   receives the remainder.
 /// - `sri/donate/<worker_name>`: full reward goes to the pool.

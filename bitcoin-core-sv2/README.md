@@ -8,6 +8,14 @@ A Rust library that integrates [Bitcoin Core](https://bitcoin.org/en/bitcoin-cor
 - building Sv2 applications that act as a Client under the Template Distribution Protocol (e.g.: Pool or JDC) while connecting directly to the Bitcoin Core node.
 - building a Sv2 Template Provider application that acts as a Template Distribution Protocol Server while creating templates from a Bitcoin Core node.
 
+The crate exposes three module families:
+
+- `bitcoin_core_sv2::common` - version-agnostic enum-dispatch runtime handles and factories based only on Sv2 protocol IO primitives.
+- `bitcoin_core_sv2::unix_capnp::v30x` - Bitcoin Core v30.x IPC implementation.
+- `bitcoin_core_sv2::unix_capnp::v31x` - Bitcoin Core v31.x IPC implementation.
+
+Downstream applications should integrate through `bitcoin_core_sv2::common` and choose the Bitcoin Core major version at runtime.
+
 ## Requirements
 
 In order to build this, crate you need `capnproto` on your system.
@@ -26,7 +34,7 @@ brew install capnproto
 
 ### `LocalSet` Requirement
 
-Due to limitations in the `capnp-rpc` dependency (where some abstractions do not implement the `Send` trait), `BitcoinCoreSv2TDP` must be run within a [`tokio::task::LocalSet`](https://docs.rs/tokio/latest/tokio/task/struct.LocalSet.html). The crate examples demonstrate the proper setup pattern.
+Due to limitations in the `capnp-rpc` dependency (where some abstractions do not implement the `Send` trait), `BitcoinCoreSv2TDP` and `BitcoinCoreSv2JDP` must be run within a [`tokio::task::LocalSet`](https://docs.rs/tokio/latest/tokio/task/struct.LocalSet.html). The crate examples demonstrate the proper setup pattern.
 
 ### Fee Threshold
 
@@ -36,15 +44,10 @@ The `fee_threshold` parameter (in satoshis) determines when a new template is di
 
 The `min_interval` parameter (in seconds) determines the minimum amount of time between two consecutive `NewTemplate` messages (with exception to Chain Tip updates, which are always sent immediately, followed by `SetNewPrevHash`).
 
-## Version Compatibility
+## Examples
 
-| `bitcoin_core_sv2` | Bitcoin Core |
-|--------------------|--------------|
-| v0.1.0             | v30.2        |
-| v0.1.1             | v30.2        |
-| v0.1.2             | v30.2        |
-| v0.2.0             | v31.0        |
-| v0.3.0             | v31.0        |
+- `tdp_logger_v30x` - Template Distribution Protocol logger wired to `bitcoin_core_sv2::unix_capnp::v30x`.
+- `tdp_logger_v31x` - Template Distribution Protocol logger wired to `bitcoin_core_sv2::unix_capnp::v31x`.
 
 ## License
 

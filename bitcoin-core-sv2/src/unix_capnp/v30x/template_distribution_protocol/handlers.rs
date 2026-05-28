@@ -1,12 +1,13 @@
-use crate::template_distribution_protocol::BitcoinCoreSv2TDP;
+//! Handlers for Bitcoin Core v30.x Sv2 Template Distribution Protocol via capnp over UNIX socket.
 
-use crate::template_distribution_protocol::error::BitcoinCoreSv2TDPError;
+use crate::unix_capnp::v30x::template_distribution_protocol::{
+    BitcoinCoreSv2TDP, error::BitcoinCoreSv2TDPError,
+};
 use stratum_core::{
     parsers_sv2::TemplateDistribution,
     template_distribution_sv2::{
-        CoinbaseOutputConstraints, ERROR_CODE_REQUEST_TRANSACTION_DATA_STALE_TEMPLATE_ID,
-        ERROR_CODE_REQUEST_TRANSACTION_DATA_TEMPLATE_ID_NOT_FOUND, RequestTransactionData,
-        RequestTransactionDataError, SubmitSolution,
+        CoinbaseOutputConstraints, RequestTransactionData, RequestTransactionDataError,
+        SubmitSolution,
     },
 };
 use tokio_util::sync::CancellationToken;
@@ -82,7 +83,7 @@ impl BitcoinCoreSv2TDP {
             );
             let request_transaction_data_error = RequestTransactionDataError {
                 template_id: request_transaction_data.template_id,
-                error_code: ERROR_CODE_REQUEST_TRANSACTION_DATA_STALE_TEMPLATE_ID
+                error_code: "stale-template-id"
                     .to_string()
                     .try_into()
                     .expect("error code must be valid string"),
@@ -148,7 +149,7 @@ impl BitcoinCoreSv2TDP {
                     );
                     TemplateDistribution::RequestTransactionDataError(RequestTransactionDataError {
                         template_id: request_transaction_data.template_id,
-                        error_code: ERROR_CODE_REQUEST_TRANSACTION_DATA_TEMPLATE_ID_NOT_FOUND
+                        error_code: "template-id-not-found"
                             .to_string()
                             .try_into()
                             .expect("error code must be valid string"),

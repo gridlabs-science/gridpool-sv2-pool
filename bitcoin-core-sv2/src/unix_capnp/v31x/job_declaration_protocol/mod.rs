@@ -1,17 +1,23 @@
-//! Module for interacting with Bitcoin Core via Sv2 Job Declaration Protocol.
+//! Module for interacting with Bitcoin Core v31.x via Sv2 Job Declaration Protocol via capnp over
+//! UNIX socket.
 
-use crate::job_declaration_protocol::{
-    error::BitcoinCoreSv2JDPError, io::JdRequest, mempool::MempoolMirror,
+use crate::{
+    common::job_declaration_protocol::io::JdRequest,
+    unix_capnp::v31x::job_declaration_protocol::{
+        error::BitcoinCoreSv2JDPError, mempool::MempoolMirror,
+    },
 };
 use async_channel::Receiver;
 use bitcoin_capnp_types::{
+    capnp,
+    capnp_rpc::{RpcSystem, rpc_twoparty_capnp, twoparty},
     init_capnp::init::Client as InitIpcClient,
     mining_capnp::{
         block_template::Client as BlockTemplateIpcClient, mining::Client as MiningIpcClient,
     },
     proxy_capnp::{thread::Client as ThreadIpcClient, thread_map::Client as ThreadMapIpcClient},
 };
-use capnp_rpc::{RpcSystem, rpc_twoparty_capnp, twoparty};
+use bitcoin_capnp_types_v31 as bitcoin_capnp_types;
 use std::{cell::RefCell, path::Path, rc::Rc};
 use stratum_core::bitcoin::{Block, consensus::deserialize};
 use tokio::net::UnixStream;
@@ -21,7 +27,6 @@ use tracing::info;
 
 pub mod error;
 mod handlers;
-pub mod io;
 mod mempool;
 mod monitors;
 

@@ -1,4 +1,5 @@
-//! Local mirror of Bitcoin Core's mempool state for job validation.
+//! Local mempool mirror for Bitcoin Core v31.x Sv2 Job Declaration Protocol via capnp over UNIX
+//! socket.
 
 use std::collections::HashMap;
 use stratum_core::bitcoin::{Block, BlockHash, CompactTarget, Transaction, Wtxid};

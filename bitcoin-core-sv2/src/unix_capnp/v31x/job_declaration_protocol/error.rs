@@ -1,9 +1,11 @@
-//! Error types for the Bitcoin Core IPC integration.
+//! Error types for Bitcoin Core v31.x Sv2 Job Declaration Protocol via capnp over UNIX socket.
 
 use std::path::PathBuf;
 use stratum_core::bitcoin::consensus;
 
-/// Errors from the [`crate::job_declaration_protocol::BitcoinCoreSv2JDP`] layer.
+use bitcoin_capnp_types_v31::capnp;
+
+/// Errors from the [`crate::unix_capnp::v31x::job_declaration_protocol::BitcoinCoreSv2JDP`] layer.
 #[derive(Debug)]
 pub enum BitcoinCoreSv2JDPError {
     /// Cap'n Proto RPC error.
