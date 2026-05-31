@@ -10,7 +10,7 @@ use stratum_apps::stratum_core::{common_messages_sv2::*, job_declaration_sv2::*}
 #[tokio::test]
 async fn pool_propagates_block_with_bitcoin_core_ipc() {
     start_tracing();
-    let bitcoin_core = start_bitcoin_core(DifficultyLevel::Low);
+    let bitcoin_core = start_bitcoin_core_latest(DifficultyLevel::Low);
     let current_block_hash = bitcoin_core.get_best_block_hash().unwrap();
     let (pool, pool_addr, _) = start_pool(
         ipc_config(
@@ -128,7 +128,7 @@ async fn jdc_propagates_block_with_bitcoin_core_ipc() {
 #[tokio::test]
 async fn jdc_solo_mining_with_bitcoin_core_ipc() {
     start_tracing();
-    let bitcoin_core = start_bitcoin_core(DifficultyLevel::Low);
+    let bitcoin_core = start_bitcoin_core_latest(DifficultyLevel::Low);
     let current_block_hash = bitcoin_core.get_best_block_hash().unwrap();
 
     let (jdc, jdc_addr, _) = start_jdc(

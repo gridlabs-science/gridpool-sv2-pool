@@ -5,13 +5,17 @@ use std::{
     path::PathBuf,
     process::{Child, Command, Stdio},
 };
-use stratum_apps::stratum_core::bitcoin::{Address, Amount, Txid};
+use stratum_apps::{
+    bitcoin_core_sv2::common::BitcoinCoreVersion,
+    stratum_core::bitcoin::{Address, Amount, Txid},
+};
 use tracing::warn;
 
 use crate::utils::{fs_utils, http, tarball};
 
 const VERSION_SV2_TP: &str = "1.1.0";
-const VERSION_BITCOIN_CORE: &str = "31.0";
+const BITCOIN_CORE_V30X: &str = "30.2";
+const BITCOIN_CORE_V31X: &str = "31.0";
 /// Allow static signet fixtures to leave IBD without freezing Bitcoin Core's
 /// clock, so mined blocks still use wall-clock timestamps.
 ///
@@ -38,17 +42,28 @@ fn get_sv2_tp_filename(os: &str, arch: &str) -> String {
     }
 }
 
-fn get_bitcoin_core_filename(os: &str, arch: &str) -> String {
+fn get_bitcoin_core_filename(os: &str, arch: &str, bitcoin_core_version: &str) -> String {
     match (os, arch) {
         ("macos", "aarch64") => {
-            format!("bitcoin-{VERSION_BITCOIN_CORE}-arm64-apple-darwin.tar.gz")
+            format!("bitcoin-{bitcoin_core_version}-arm64-apple-darwin.tar.gz")
         }
         ("macos", "x86_64") => {
-            format!("bitcoin-{VERSION_BITCOIN_CORE}-x86_64-apple-darwin.tar.gz")
+            format!("bitcoin-{bitcoin_core_version}-x86_64-apple-darwin.tar.gz")
         }
-        ("linux", "x86_64") => format!("bitcoin-{VERSION_BITCOIN_CORE}-x86_64-linux-gnu.tar.gz"),
-        ("linux", "aarch64") => format!("bitcoin-{VERSION_BITCOIN_CORE}-aarch64-linux-gnu.tar.gz"),
-        _ => format!("bitcoin-{VERSION_BITCOIN_CORE}-x86_64-apple-darwin.tar.gz"),
+        ("linux", "x86_64") => format!("bitcoin-{bitcoin_core_version}-x86_64-linux-gnu.tar.gz"),
+        ("linux", "aarch64") => {
+            format!("bitcoin-{bitcoin_core_version}-aarch64-linux-gnu.tar.gz")
+        }
+        _ => format!("bitcoin-{bitcoin_core_version}-x86_64-apple-darwin.tar.gz"),
+    }
+}
+
+pub const BITCOIN_CORE_LATEST: BitcoinCoreVersion = BitcoinCoreVersion::V31X;
+
+fn release_version(version: BitcoinCoreVersion) -> &'static str {
+    match version {
+        BitcoinCoreVersion::V30X => BITCOIN_CORE_V30X,
+        BitcoinCoreVersion::V31X => BITCOIN_CORE_V31X,
     }
 }
 
@@ -79,8 +94,12 @@ pub struct BitcoinCore {
 }
 
 impl BitcoinCore {
-    /// Start a new [`BitcoinCore`] instance with IPC enabled.
-    pub fn start(port: u16, difficulty_level: DifficultyLevel) -> Self {
+    /// Start a new [`BitcoinCore`] instance with IPC enabled for a specific Core major line.
+    pub fn start(
+        port: u16,
+        difficulty_level: DifficultyLevel,
+        node_version: BitcoinCoreVersion,
+    ) -> Self {
         let current_dir: PathBuf = std::env::current_dir().expect("failed to read current dir");
         let bin_dir = current_dir.join("template-provider");
         if !bin_dir.exists() {
@@ -156,10 +175,11 @@ impl BitcoinCore {
         }
 
         // Download and setup Bitcoin Core with IPC support
+        let bitcoin_core_version = release_version(node_version);
         let os = env::consts::OS;
         let arch = env::consts::ARCH;
-        let bitcoin_filename = get_bitcoin_core_filename(os, arch);
-        let bitcoin_home = bin_dir.join(format!("bitcoin-{VERSION_BITCOIN_CORE}"));
+        let bitcoin_filename = get_bitcoin_core_filename(os, arch, bitcoin_core_version);
+        let bitcoin_home = bin_dir.join(format!("bitcoin-{bitcoin_core_version}"));
         let bitcoin_node_bin = bitcoin_home.join("libexec").join("bitcoin-node");
         let bitcoin_cli_bin = bitcoin_home.join("bin").join("bitcoin-cli");
 
@@ -167,10 +187,15 @@ impl BitcoinCore {
             let tarball_bytes = match env::var("BITCOIN_CORE_TARBALL_FILE") {
                 Ok(path) => tarball::read_from_file(&path),
                 Err(_) => {
-                    warn!("Downloading Bitcoin Core {} for the testing session. This could take a while...", VERSION_BITCOIN_CORE);
+                    warn!(
+                        "Downloading Bitcoin Core {} for the testing session. This could take a while...",
+                        bitcoin_core_version
+                    );
                     let download_endpoint = env::var("BITCOIN_CORE_DOWNLOAD_ENDPOINT")
                         .unwrap_or_else(|_| {
-                            "https://bitcoincore.org/bin/bitcoin-core-31.0".to_owned()
+                            format!(
+                                "https://bitcoincore.org/bin/bitcoin-core-{bitcoin_core_version}"
+                            )
                         });
                     let url = format!("{download_endpoint}/{bitcoin_filename}");
                     http::make_get_request(&url, 5)
@@ -182,6 +207,12 @@ impl BitcoinCore {
             }
 
             tarball::unpack(&tarball_bytes, &bin_dir);
+
+            assert!(
+                bitcoin_node_bin.exists(),
+                "Bitcoin Core node binary not found after unpack in {}",
+                bitcoin_home.display()
+            );
 
             // Sign the binaries on macOS
             if os == "macos" {
@@ -332,7 +363,7 @@ pub struct TemplateProvider {
 impl TemplateProvider {
     /// Start a new [`TemplateProvider`] instance with Bitcoin Core and standalone sv2-tp.
     pub fn start(port: u16, sv2_interval: u32, difficulty_level: DifficultyLevel) -> Self {
-        let bitcoin_core = BitcoinCore::start(port, difficulty_level);
+        let bitcoin_core = BitcoinCore::start(port, difficulty_level, BITCOIN_CORE_LATEST);
 
         let current_dir: PathBuf = std::env::current_dir().expect("failed to read current dir");
         let bin_dir = current_dir.join("template-provider");

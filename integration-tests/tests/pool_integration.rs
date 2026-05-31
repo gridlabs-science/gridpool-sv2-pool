@@ -1035,7 +1035,7 @@ async fn pool_require_standard_jobs_set_does_not_group_standard_channels() {
 #[tokio::test]
 async fn pool_require_standard_jobs_set_rejects_open_extended_mining_channel() {
     start_tracing();
-    let bitcoin_core = start_bitcoin_core(DifficultyLevel::Low);
+    let bitcoin_core = start_bitcoin_core_latest(DifficultyLevel::Low);
     let (pool, pool_addr, _) = start_pool(
         ipc_config(
             bitcoin_core.data_dir().clone(),

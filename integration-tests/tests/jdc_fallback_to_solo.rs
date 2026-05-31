@@ -7,7 +7,7 @@ use stratum_apps::stratum_core::{common_messages_sv2::*, job_declaration_sv2::*}
 #[tokio::test]
 async fn jdc_fallback_to_solo_mines_block_with_bitcoin_core_ipc() {
     start_tracing();
-    let bitcoin_core = start_bitcoin_core(DifficultyLevel::Low);
+    let bitcoin_core = start_bitcoin_core_latest(DifficultyLevel::Low);
     let current_block_hash = bitcoin_core.get_best_block_hash().unwrap();
 
     let (pool, pool_addr, jds_addr, _) =

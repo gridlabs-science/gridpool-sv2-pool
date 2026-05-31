@@ -2798,7 +2798,6 @@ name = "jd_client_sv2"
 version = "0.4.0"
 dependencies = [
  "async-channel 1.9.0",
- "bitcoin_core_sv2",
  "clap",
  "config",
  "hex",
@@ -2815,7 +2814,6 @@ version = "0.3.0"
 dependencies = [
  "async-channel 1.9.0",
  "async-trait",
- "bitcoin_core_sv2",
  "dashmap",
  "hotpath",
  "serde",
@@ -3483,7 +3481,6 @@ name = "pool_sv2"
 version = "0.5.0"
 dependencies = [
  "async-channel 1.9.0",
- "bitcoin_core_sv2",
  "clap",
  "config",
  "hex",

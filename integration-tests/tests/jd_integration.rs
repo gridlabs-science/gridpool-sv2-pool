@@ -1275,7 +1275,7 @@ async fn jdc_require_standard_jobs_set_does_not_group_standard_channels() {
 #[tokio::test]
 async fn jdc_require_standard_jobs_set_rejects_open_extended_mining_channel() {
     start_tracing();
-    let bitcoin_core = start_bitcoin_core(DifficultyLevel::Low);
+    let bitcoin_core = start_bitcoin_core_latest(DifficultyLevel::Low);
     let (pool, pool_addr, jds_addr, _) =
         start_pool_with_jds(&bitcoin_core, vec![], vec![], true).await;
 
