@@ -25,9 +25,9 @@ impl HandleCommonMessagesFromClientAsync for Downstream {
         &self,
         _client_id: Option<usize>,
     ) -> Result<Vec<u16>, Self::Error> {
-        Ok(self
-            .downstream_data
-            .super_safe_lock(|data| data.negotiated_extensions.clone()))
+        self.negotiated_extensions
+            .get()
+            .map_err(PoolError::shutdown)
     }
 
     async fn handle_setup_connection(

@@ -1,5 +1,4 @@
 use std::{
-    collections::HashMap,
     net::SocketAddr,
     sync::{
         atomic::{AtomicU32, AtomicUsize},
@@ -14,7 +13,6 @@ use stratum_apps::{
     channel_utils::ReceiverCleanup,
     coinbase_output_constraints::coinbase_output_constraints_message_with_offset,
     config_helpers::CoinbaseRewardScript,
-    custom_mutex::Mutex,
     key_utils::{Secp256k1PublicKey, Secp256k1SecretKey},
     network_helpers::accept_noise_connection,
     stratum_core::{
@@ -31,6 +29,7 @@ use stratum_apps::{
         parsers_sv2::{Mining, TemplateDistribution, Tlv},
         template_distribution_sv2::{NewTemplate, SetNewPrevHash},
     },
+    sync::{SharedLock, SharedMap},
     task_manager::TaskManager,
     utils::types::{ChannelId, DownstreamId, SharesPerMinute, VardiffKey},
 };
@@ -63,32 +62,11 @@ const POOL_ALLOCATION_BYTES: u8 = POOL_SERVER_BYTES + POOL_LOCAL_PREFIX_BYTES;
 const CLIENT_SEARCH_SPACE_BYTES: u8 = 16;
 pub const FULL_EXTRANONCE_SIZE: u8 = POOL_ALLOCATION_BYTES + CLIENT_SEARCH_SPACE_BYTES;
 
-pub struct ChannelManagerData {
-    // Mapping of `downstream_id` → `Downstream` object,
-    // used by the channel manager to locate and interact with downstream clients.
-    pub(crate) downstream: HashMap<DownstreamId, Downstream>,
-    // Unified extranonce prefix allocator, shared by standard and extended
-    // downstream channels. The allocated [`ExtranoncePrefix`] is stored on the
-    // channel itself, so dropping the channel automatically releases the slot.
-    extranonce_allocator: ExtranonceAllocator,
-    // Factory that assigns a unique ID to each new **downstream connection**.
-    downstream_id_factory: AtomicUsize,
-    // Mapping of `(downstream_id, channel_id)` → vardiff controller.
-    // Each entry manages variable difficulty for a specific downstream channel.
-    vardiff: HashMap<VardiffKey, VardiffState>,
-    // Coinbase outputs
-    coinbase_outputs: Vec<u8>,
-    // Last new prevhash
-    last_new_prev_hash: Option<SetNewPrevHash<'static>>,
-    // Last future template
-    last_future_template: Option<NewTemplate<'static>>,
-}
-
 #[derive(Clone)]
 pub struct ChannelManagerIo {
     tp_sender: Sender<TemplateDistribution<'static>>,
     tp_receiver: Receiver<TemplateDistribution<'static>>,
-    downstream_sender: Arc<Mutex<HashMap<DownstreamId, Sender<DownstreamMessage>>>>,
+    downstream_sender: SharedMap<DownstreamId, Sender<DownstreamMessage>>,
     downstream_receiver: Receiver<(usize, Mining<'static>, Option<Vec<Tlv>>)>,
 }
 
@@ -97,12 +75,8 @@ impl ChannelManagerIo {
         self.tp_sender.close();
         self.tp_receiver.close_and_drain();
         self.downstream_receiver.close_and_drain();
-        self.downstream_sender.super_safe_lock(|downstreams| {
-            for sender in downstreams.values() {
-                sender.close();
-            }
-            downstreams.clear();
-        });
+        self.downstream_sender.for_each(|_, sender| sender.close());
+        self.downstream_sender.clear();
     }
 }
 
@@ -111,7 +85,24 @@ impl ChannelManagerIo {
 /// to perform message traversal.
 #[derive(Clone)]
 pub struct ChannelManager {
-    pub(crate) channel_manager_data: Arc<Mutex<ChannelManagerData>>,
+    // Mapping of `downstream_id` -> `Downstream` object,
+    // used by the channel manager to locate and interact with downstream clients.
+    pub(crate) downstreams: SharedMap<DownstreamId, Downstream>,
+    // Unified extranonce prefix allocator, shared by standard and extended
+    // downstream channels. The allocated [`ExtranoncePrefix`] is stored on the
+    // channel itself, so dropping the channel automatically releases the slot.
+    pub(crate) extranonce_allocator: SharedLock<ExtranonceAllocator>,
+    // Factory that assigns a unique ID to each new downstream connection.
+    downstream_id_factory: Arc<AtomicUsize>,
+    // Mapping of `(downstream_id, channel_id)` -> vardiff controller.
+    // Each entry manages variable difficulty for a specific downstream channel.
+    pub(crate) vardiff: SharedMap<VardiffKey, VardiffState>,
+    // Coinbase outputs.
+    pub(crate) coinbase_outputs: Vec<u8>,
+    // Last new prevhash.
+    pub(crate) last_new_prev_hash: SharedLock<Option<SetNewPrevHash<'static>>>,
+    // Last future template.
+    pub(crate) last_future_template: SharedLock<Option<NewTemplate<'static>>>,
     channel_manager_io: ChannelManagerIo,
     pool_tag_string: String,
     share_batch_size: usize,
@@ -181,25 +172,21 @@ impl ChannelManager {
             ExtranonceAllocator::new(local_prefix_bytes, FULL_EXTRANONCE_SIZE, POOL_MAX_CHANNELS)
                 .map_err(PoolError::shutdown)?;
 
-        let channel_manager_data = Arc::new(Mutex::new(ChannelManagerData {
-            downstream: HashMap::new(),
-            extranonce_allocator,
-            downstream_id_factory: AtomicUsize::new(1),
-            vardiff: HashMap::new(),
-            coinbase_outputs,
-            last_future_template: None,
-            last_new_prev_hash: None,
-        }));
-
         let channel_manager_io = ChannelManagerIo {
             tp_sender,
             tp_receiver,
-            downstream_sender: Arc::new(Mutex::new(HashMap::new())),
+            downstream_sender: SharedMap::new(),
             downstream_receiver,
         };
 
         let channel_manager = ChannelManager {
-            channel_manager_data,
+            downstreams: SharedMap::new(),
+            extranonce_allocator: SharedLock::new(extranonce_allocator),
+            downstream_id_factory: Arc::new(AtomicUsize::new(1)),
+            vardiff: SharedMap::new(),
+            coinbase_outputs,
+            last_future_template: SharedLock::new(None),
+            last_new_prev_hash: SharedLock::new(None),
             channel_manager_io,
             share_batch_size: config.share_batch_size(),
             shares_per_minute: config.shares_per_minute(),
@@ -217,18 +204,23 @@ impl ChannelManager {
     // Returns a `GroupChannel` if successful, otherwise returns `None`.
     //
     // To be called before calling Downstream::new.
-    fn bootstrap_group_channel(&self, channel_id: ChannelId) -> Option<GroupChannel<'static>> {
-        let (last_future_template, last_set_new_prev_hash) =
-            self.channel_manager_data.super_safe_lock(|data| {
-                (
-                    data.last_future_template
-                        .clone()
-                        .expect("No future template found after readiness check"),
-                    data.last_new_prev_hash
-                        .clone()
-                        .expect("No new prevhash found after readiness check"),
-                )
-            });
+    #[allow(clippy::result_large_err)]
+    fn bootstrap_group_channel(
+        &self,
+        channel_id: ChannelId,
+    ) -> PoolResult<Option<GroupChannel<'static>>, error::ChannelManager> {
+        let last_future_template = self
+            .last_future_template
+            .get()
+            .map_err(PoolError::shutdown)?
+            .expect("No future template found after readiness check");
+
+        let last_set_new_prev_hash = self
+            .last_new_prev_hash
+            .get()
+            .map_err(PoolError::shutdown)?
+            .expect("No new prevhash found after readiness check");
+
         let mut group_channel = match GroupChannel::new_for_pool(
             channel_id,
             FULL_EXTRANONCE_SIZE as usize,
@@ -237,7 +229,7 @@ impl ChannelManager {
             Ok(channel) => channel,
             Err(e) => {
                 error!(error = ?e, "Failed to bootstrap group channel");
-                return None;
+                return Ok(None);
             }
         };
 
@@ -248,15 +240,15 @@ impl ChannelManager {
 
         if let Err(e) = group_channel.on_new_template(last_future_template, vec![coinbase_output]) {
             error!(error = ?e, "Failed to add template to group channel");
-            return None;
+            return Ok(None);
         }
 
         if let Err(e) = group_channel.on_set_new_prev_hash(last_set_new_prev_hash) {
             error!(error = ?e, "Failed to set new prevhash for group channel");
-            return None;
+            return Ok(None);
         }
 
-        Some(group_channel)
+        Ok(Some(group_channel))
     }
 
     /// Starts the downstream server, and accepts new connection request.
@@ -276,9 +268,14 @@ impl ChannelManager {
 
         // Wait for initial template and prevhash before accepting connections
         loop {
-            let has_required_data = this.channel_manager_data.super_safe_lock(|data| {
-                data.last_future_template.is_some() && data.last_new_prev_hash.is_some()
-            });
+            let has_required_data = this
+                .last_future_template
+                .with(|template| template.is_some())
+                .map_err(PoolError::shutdown)?
+                && this
+                    .last_new_prev_hash
+                    .with(|prevhash| prevhash.is_some())
+                    .map_err(PoolError::shutdown)?;
 
             if has_required_data {
                 info!("Required template data received, ready to accept connections");
@@ -345,13 +342,20 @@ impl ChannelManager {
                                         }
                                     };
 
-                                    let downstream_id = this.channel_manager_data
-                                        .super_safe_lock(|data| data.downstream_id_factory.fetch_add(1, Ordering::SeqCst));
+                                    let downstream_id = this
+                                        .downstream_id_factory
+                                        .fetch_add(1, Ordering::SeqCst);
 
                                     let channel_id_factory = AtomicU32::new(1);
                                     let group_channel_id = channel_id_factory.fetch_add(1, Ordering::SeqCst);
 
-                                    let group_channel = match this.bootstrap_group_channel(group_channel_id) {
+                                    let Ok(group_channel) = this.bootstrap_group_channel(group_channel_id) else {
+                                        error!("Failed to bootstrap group channel - disconnecting downstream {downstream_id}");
+                                        cancellation_token_clone.cancel();
+                                        return;
+                                    };
+
+                                    let group_channel = match group_channel {
                                         Some(group_channel) => group_channel,
                                         None => {
                                             error!("Failed to bootstrap group channel - disconnecting downstream {downstream_id}");
@@ -375,11 +379,11 @@ impl ChannelManager {
                                         this.required_extensions.clone(),
                                     );
 
-                                    this.channel_manager_io.downstream_sender.super_safe_lock(|map| map.insert(downstream_id, channel_manager_sender));
+                                    this.channel_manager_io
+                                        .downstream_sender
+                                        .insert(downstream_id, channel_manager_sender);
 
-                                    this.channel_manager_data.super_safe_lock(|data| {
-                                        data.downstream.insert(downstream_id, downstream.clone());
-                                    });
+                                    this.downstreams.insert(downstream_id, downstream.clone());
 
                                     downstream
                                         .start(
@@ -469,15 +473,12 @@ impl ChannelManager {
     // 1. Removes the corresponding Downstream from the `downstream` map.
     // 2. Removes the channels of the corresponding Downstream from `vardiff` map.
     pub fn remove_downstream(&self, downstream_id: DownstreamId) {
-        self.channel_manager_data.super_safe_lock(|cm_data| {
-            cm_data.downstream.remove(&downstream_id);
-            cm_data
-                .vardiff
-                .retain(|key, _| key.downstream_id != downstream_id);
-        });
+        self.downstreams.remove(&downstream_id);
+        self.vardiff
+            .retain(|key, _| key.downstream_id != downstream_id);
         self.channel_manager_io
             .downstream_sender
-            .super_safe_lock(|map| map.remove(&downstream_id));
+            .remove(&downstream_id);
     }
 
     // Handles messages received from the TP subsystem.
@@ -627,38 +628,43 @@ impl ChannelManager {
     //   upstream if applicable.
     async fn run_vardiff(&self) -> PoolResult<(), error::ChannelManager> {
         let mut messages: Vec<RouteMessageTo> = vec![];
-        self.channel_manager_data
-            .super_safe_lock(|channel_manager_data| {
-                for (vardiff_key, vardiff_state) in channel_manager_data.vardiff.iter_mut() {
-                    let downstream_id = &vardiff_key.downstream_id;
-                    let channel_id = &vardiff_key.channel_id;
-
-                    let Some(downstream) = channel_manager_data.downstream.get_mut(downstream_id)
-                    else {
-                        continue;
-                    };
-                    downstream.downstream_data.super_safe_lock(|data| {
-                        if let Some(standard_channel) = data.standard_channels.get_mut(channel_id) {
-                            Self::run_vardiff_on_standard_channel(
-                                *downstream_id,
-                                *channel_id,
-                                standard_channel,
-                                vardiff_state,
-                                &mut messages,
-                            );
-                        }
-                        if let Some(extended_channel) = data.extended_channels.get_mut(channel_id) {
-                            Self::run_vardiff_on_extended_channel(
-                                *downstream_id,
-                                *channel_id,
-                                extended_channel,
-                                vardiff_state,
-                                &mut messages,
-                            );
-                        }
+        for vardiff_key in self.vardiff.keys() {
+            let downstream_id = vardiff_key.downstream_id;
+            let channel_id = vardiff_key.channel_id;
+            if self
+                .downstreams
+                .with(&downstream_id, |downstream| {
+                    self.vardiff.with_mut(&vardiff_key, |vardiff_state| {
+                        downstream
+                            .standard_channels
+                            .with_mut(&channel_id, |standard_channel| {
+                                Self::run_vardiff_on_standard_channel(
+                                    downstream_id,
+                                    channel_id,
+                                    standard_channel,
+                                    vardiff_state,
+                                    &mut messages,
+                                );
+                            });
+                        downstream
+                            .extended_channels
+                            .with_mut(&channel_id, |extended_channel| {
+                                Self::run_vardiff_on_extended_channel(
+                                    downstream_id,
+                                    channel_id,
+                                    extended_channel,
+                                    vardiff_state,
+                                    &mut messages,
+                                );
+                            });
                     });
-                }
-            });
+                })
+                .is_none()
+            {
+                self.vardiff.remove(&vardiff_key);
+                continue;
+            }
+        }
 
         for message in messages {
             // A send can only fail if the receiver side of the channel is closed.
@@ -699,6 +705,32 @@ impl ChannelManager {
 
         Ok(())
     }
+
+    /// Runs `f` for a downstream that must still be connected.
+    ///
+    /// Returns `DownstreamNotFound` if the downstream disappeared before the lookup completed.
+    #[allow(clippy::result_large_err)]
+    fn with_live_downstream<R, F>(
+        &self,
+        downstream_id: DownstreamId,
+        f: F,
+    ) -> PoolResult<R, error::ChannelManager>
+    where
+        F: FnOnce(&Downstream) -> PoolResult<R, error::ChannelManager>,
+    {
+        match self
+            .downstreams
+            .with(&downstream_id, |downstream| f(downstream))
+        {
+            Some(result) => result,
+            None => Err({
+                PoolError::disconnect(
+                    PoolErrorKind::DownstreamNotFound(downstream_id),
+                    downstream_id,
+                )
+            }),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -727,7 +759,7 @@ impl RouteMessageTo<'_> {
             RouteMessageTo::Downstream((downstream_id, message)) => {
                 let sender = channel_manager_io
                     .downstream_sender
-                    .super_safe_lock(|map| map.get(&downstream_id).cloned());
+                    .get_cloned(&downstream_id);
 
                 if let Some(sender) = sender {
                     sender.send((message.into_static(), None)).await?;

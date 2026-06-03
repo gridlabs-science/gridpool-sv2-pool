@@ -22,9 +22,9 @@ impl HandleExtensionsFromClientAsync for Downstream {
         &self,
         _client_id: Option<usize>,
     ) -> Result<Vec<u16>, Self::Error> {
-        Ok(self
-            .downstream_data
-            .super_safe_lock(|data| data.negotiated_extensions.clone()))
+        self.negotiated_extensions
+            .get()
+            .map_err(PoolError::shutdown)
     }
 
     async fn handle_request_extensions(
@@ -114,9 +114,9 @@ impl HandleExtensionsFromClientAsync for Downstream {
             );
 
             // Store the negotiated extensions in the shared downstream data
-            self.downstream_data.super_safe_lock(|data| {
-                data.negotiated_extensions = supported.clone();
-            });
+            self.negotiated_extensions
+                .set(supported.clone())
+                .map_err(PoolError::shutdown)?;
 
             let success = RequestExtensionsSuccess {
                 request_id: msg.request_id,
