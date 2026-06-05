@@ -1,0 +1,194 @@
+name: Notify JDC/tProxy Config Update
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'miner-apps/jd-client/config-examples/**/*.toml'
+      - 'miner-apps/translator/config-examples/**/*.toml'
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number (for manual runs)'
+        required: true
+
+jobs:
+  create-issue:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Detect config schema changes
+        id: config-schema-changes
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "Manual dispatch requested; skipping config schema-change gate."
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          CHANGED_FILES="$(scripts/list-config-schema-changes.sh "${{ github.event.before }}" "${{ github.sha }}")"
+
+          if [[ -z "$CHANGED_FILES" ]]; then
+            echo "No JDC/tProxy config schema changes detected."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          {
+            echo "changed=true"
+            echo "files<<EOF"
+            echo "$CHANGED_FILES"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create Issue
+        if: steps.config-schema-changes.outputs.changed == 'true'
+        uses: actions/github-script@v9
+        env:
+          CHANGED_CONFIG_FILES: ${{ steps.config-schema-changes.outputs.files }}
+        with:
+          github-token: ${{ secrets.SV2_UI_TOKEN }}
+          script: |
+            const { owner, repo } = context.repo;
+            const targetOwner = 'stratum-mining';
+            const targetRepo = 'sv2-ui';
+            const labelName = 'jdc-tproxy-config-change';
+            const issueTitlePrefix = 'JDC/tProxy config updated in PR';
+            const watchedFilePatterns = [
+              /^miner-apps\/jd-client\/config-examples\/.*\.toml$/,
+              /^miner-apps\/translator\/config-examples\/.*\.toml$/
+            ];
+
+            let prNumber;
+
+            // 1. Manual trigger support
+            if (context.eventName === 'workflow_dispatch') {
+              prNumber = context.payload.inputs?.pr_number;
+            }
+
+            // 2. Try to resolve from context
+            if (!prNumber) {
+              let prs = [];
+              try {
+                const response = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+                  owner,
+                  repo,
+                  commit_sha: context.sha
+                });
+                prs = response.data;
+              } catch (error) {
+                core.warning(`Could not resolve PR from commit ${context.sha}: ${error.message}`);
+              }
+
+              prNumber = prs[0]?.number;
+            }
+
+            if (!prNumber) {
+              core.setFailed('No PR associated and no PR number provided');
+              return;
+            }
+
+            const numericPrNumber = Number(prNumber);
+            if (!Number.isInteger(numericPrNumber)) {
+              core.setFailed(`Invalid PR number: ${prNumber}`);
+              return;
+            }
+
+            const prUrl = `${context.serverUrl}/${owner}/${repo}/pull/${numericPrNumber}`;
+            const issueTitle = `${issueTitlePrefix} #${numericPrNumber}`;
+
+            const changedFiles = await github.paginate(github.rest.pulls.listFiles, {
+              owner,
+              repo,
+              pull_number: numericPrNumber,
+              per_page: 100
+            });
+            const schemaChangedFiles = (process.env.CHANGED_CONFIG_FILES || '')
+              .split('\n')
+              .filter(Boolean);
+
+            const changedConfigFiles = changedFiles
+              .map(({ filename }) => filename)
+              .filter(filename => watchedFilePatterns.some(pattern => pattern.test(filename)))
+              .filter(filename => schemaChangedFiles.length === 0 || schemaChangedFiles.includes(filename))
+              .sort();
+
+            const changedFilesList = changedConfigFiles.length > 0
+              ? changedConfigFiles.map(filename => `- \`${filename}\``).join('\n')
+              : '- No watched config files were returned for this PR. Please verify manually.';
+
+            const issues = await github.paginate(github.rest.issues.listForRepo, {
+              owner: targetOwner,
+              repo: targetRepo,
+              state: 'open',
+              per_page: 100
+            });
+
+            const exists = issues.find(issue => issue.title === issueTitle);
+            if (exists) return;
+
+            let labels = [];
+            try {
+              await github.rest.issues.getLabel({
+                owner: targetOwner,
+                repo: targetRepo,
+                name: labelName
+              });
+              labels = [labelName];
+            } catch (error) {
+              if (error.status !== 404) {
+                core.warning(`Could not read label ${labelName}: ${error.message}`);
+              } else {
+                try {
+                  await github.rest.issues.createLabel({
+                    owner: targetOwner,
+                    repo: targetRepo,
+                    name: labelName,
+                    color: '0e8a16',
+                    description: 'JDC or tProxy config files changed in sv2-apps'
+                  });
+                  labels = [labelName];
+                } catch (createError) {
+                  core.warning(`Could not create label ${labelName}: ${createError.message}`);
+                }
+              }
+            }
+
+            const issueBody = [
+              '## Summary',
+              `JDC/tProxy config files were updated in [PR #${numericPrNumber}](${prUrl}).`,
+              '',
+              'These files can affect the sv2-ui config generator, so the UI may need matching updates.',
+              '',
+              '## Changed Files',
+              changedFilesList,
+              '',
+              '## Action Required',
+              '- [ ] Review the config generator for JDC/tProxy schema changes',
+              '- [ ] Update generated forms, templates, and defaults where needed',
+              '- [ ] Verify generated configs against the latest examples'
+            ].join('\n');
+
+            const issuePayload = {
+              owner: targetOwner,
+              repo: targetRepo,
+              title: issueTitle,
+              body: issueBody
+            };
+
+            if (labels.length > 0) {
+              issuePayload.labels = labels;
+            }
+
+            await github.rest.issues.create(issuePayload);
