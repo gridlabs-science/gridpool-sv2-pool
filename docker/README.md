@@ -15,7 +15,7 @@ The services are wired together on a dedicated Docker network and can be enabled
 
 * Docker
 * Docker Compose (v2+)
-* A fully synced **Bitcoin Core v30.2++** node running on **testnet4** (or any network you prefer)
+* A fully synced **Bitcoin Core v30+** node running
 * Access to the `node.sock` file in your Bitcoin data directory
 
 ---
@@ -74,6 +74,8 @@ In the same directory as `docker-compose.yml`, create a `docker_env` file:
 
 ```
 BITCOIN_SOCKET_PATH=/absolute/path/to/your/node.sock
+POOL_BITCOIN_CORE_IPC_VERSION=31
+JDC_BITCOIN_CORE_IPC_VERSION=31
 ```
 Make sure the path is correct, if there are spaces (like `Application Support`), keep the value unquoted.
 

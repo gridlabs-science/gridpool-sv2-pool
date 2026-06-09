@@ -46,6 +46,7 @@ monitoring_cache_refresh_secs = 15
 
 # Bitcoin Core IPC config
 [template_provider_type.BitcoinCoreIpc]
+version = ${POOL_BITCOIN_CORE_IPC_VERSION}
 network = "mainnet"
 fee_threshold = ${POOL_FEE_THRESHOLD}
 min_interval = ${POOL_MIN_INTERVAL}

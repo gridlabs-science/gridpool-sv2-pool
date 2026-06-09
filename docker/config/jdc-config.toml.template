@@ -61,6 +61,7 @@ user_identity = "${JDC_USER_IDENTITY}"
 
 # Bitcoin Core IPC config
 [template_provider_type.BitcoinCoreIpc]
+version = ${JDC_BITCOIN_CORE_IPC_VERSION}
 network = "mainnet"
 fee_threshold = ${JDC_FEE_THRESHOLD}
 min_interval = ${JDC_MIN_INTERVAL}
