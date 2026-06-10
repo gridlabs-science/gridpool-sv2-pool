@@ -144,6 +144,36 @@ When modifying the monitoring API, follow these guidelines:
 2. **Add new data via optional fields or new endpoints** - Don't modify existing response structures
 3. **Don't change field types or semantics** - Existing field definitions within the same API version are immutable
 
+### Versioning and public dependencies
+
+Whenever submitting a PR that modifies some crate, it's up to the contributor to make sure the versioning of this crate remains sane. The main factors to take into account are:
+
+1. According to SemVer 2.0.0 and the modifications on this PR, what kind of version bump does this crate deserve?
+2. Avoiding redundant version bumps:
+   - Has the version of crate already been bumped on this repo since it was last published to crates.io?
+   - If yes, do the changes introduced by this PR require a larger bump than the one already made?
+3. Keeping sanity across dependency chains:
+   - Which other crates on this repo depend on this crate?
+   - Amongst them, are there types from this crate exposed on their public APIs?
+
+Factors 1 and 2 are partially enforced via CI (but enforcement via PR review is still encouraged). Factor 3 must be fully enforced via PR reviews.
+
+Factor 2 is about avoiding redundant version bumps. Since crates are only published to crates.io periodically (during global release), maybe other PRs already bumped this crate version.
+
+Factor 3 is about keeping sanity across dependency chains. If a crate only uses a dependency internally, updating that dependency does not automatically require an incompatible version bump for the dependent crate. However, if a dependency appears in the dependent crate's public API, then changing that dependency to an incompatible version also changes the dependent crate's public API.
+
+Public API exposure includes, but is not limited to:
+- re-exports;
+- public function or method arguments and return types;
+- public trait method signatures;
+- public enum variant payloads;
+- public struct fields;
+- public type aliases and associated types.
+
+For crates that are already `1.0.0` or above, an incompatible version bump means a MAJOR bump. For `0.x.y` crates, an incompatible version bump usually means a MINOR bump, for example `0.2.3 -> 0.3.0`.
+
+On every global release, a github issue (titled "version bumps for `x.y.z`" or similar) is used to keep track of all crate version bumps. If a PR is bumping some crate version, the PR author should take note on the corresponding issue.
+
 ### Your First Code Contribution
 >In order to contribute, a basic learning about git and github is needed. If you're not familiar with them, have a look at https://docs.github.com/en/get-started/start-your-journey/git-and-github-learning-resources to dig into and learn how to use them.
 
