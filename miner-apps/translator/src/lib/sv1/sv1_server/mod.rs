@@ -966,7 +966,7 @@ impl Sv1Server {
         let user_identity = if user_identity.starts_with("sri/") {
             user_identity.clone()
         } else {
-            format!("{}.miner{}", user_identity, miner_id)
+            format!("{user_identity}.miner{miner_id}")
         };
 
         downstream
@@ -1391,7 +1391,7 @@ impl Sv1Server {
         let counter = self
             .keepalive_job_id_counter
             .fetch_add(1, Ordering::Relaxed);
-        format!("{}#{}", original_job_id, counter)
+        format!("{original_job_id}#{counter}")
     }
 
     /// Extracts the original upstream job ID from a keepalive job ID.

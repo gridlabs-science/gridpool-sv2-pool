@@ -34,7 +34,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@1.85
+      - uses: dtolnay/rust-toolchain@1.88
 
       - name: Cache Cargo
         uses: actions/cache@v4
@@ -135,5 +135,4 @@ jobs:
           file: pool-apps-${{ matrix.target }}.tar.gz
           asset_name: pool-apps-${{ matrix.target }}.tar.gz
           tag: ${{ github.ref }}
-
 

@@ -648,7 +648,7 @@ async fn handle_client_by_id(
         None => (
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
-                error: format!("Sv2 client {} not found", client_id),
+                error: format!("Sv2 client {client_id} not found"),
             }),
         )
             .into_response(),
@@ -708,7 +708,7 @@ async fn handle_client_channels(
         None => (
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
-                error: format!("Sv2 client {} not found", client_id),
+                error: format!("Sv2 client {client_id} not found"),
             }),
         )
             .into_response(),
@@ -791,7 +791,7 @@ async fn handle_sv1_client_by_id(
         None => (
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
-                error: format!("Sv1 client {} not found", client_id),
+                error: format!("Sv1 client {client_id} not found"),
             }),
         )
             .into_response(),
@@ -828,7 +828,7 @@ async fn handle_prometheus_metrics(State(state): State<ServerState>) -> Response
             Err(e) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ErrorResponse {
-                    error: format!("UTF-8 error: {}", e),
+                    error: format!("UTF-8 error: {e}"),
                 }),
             )
                 .into_response(),
@@ -836,7 +836,7 @@ async fn handle_prometheus_metrics(State(state): State<ServerState>) -> Response
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
-                error: format!("Encoding error: {}", e),
+                error: format!("Encoding error: {e}"),
             }),
         )
             .into_response(),

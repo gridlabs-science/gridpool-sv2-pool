@@ -224,10 +224,7 @@ impl MockUpstream {
                         }
                     }
                 } else {
-                    panic!(
-                        "MockUpstream: first message must be SetupConnection, got {}",
-                        msg_type
-                    );
+                    panic!("MockUpstream: first message must be SetupConnection, got {msg_type}");
                 }
             }
 
