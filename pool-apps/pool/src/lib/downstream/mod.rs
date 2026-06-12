@@ -14,10 +14,7 @@ use stratum_apps::{
     network_helpers::noise_stream::NoiseTcpStream,
     stratum_core::{
         channels_sv2::server::{
-            extended::ExtendedChannel,
-            group::GroupChannel,
-            jobs::{extended::ExtendedJob, job_store::DefaultJobStore, standard::StandardJob},
-            standard::StandardChannel,
+            extended::ExtendedChannel, group::GroupChannel, standard::StandardChannel,
         },
         common_messages_sv2::MESSAGE_TYPE_SETUP_CONNECTION,
         framing_sv2,
@@ -50,11 +47,9 @@ mod extensions_message_handler;
 /// - Active [`StandardChannel`]s keyed by channel ID.
 /// - Extensions that have been successfully negotiated with this client
 pub struct DownstreamData {
-    pub group_channel: GroupChannel<'static, DefaultJobStore<ExtendedJob<'static>>>,
-    pub extended_channels:
-        HashMap<ChannelId, ExtendedChannel<'static, DefaultJobStore<ExtendedJob<'static>>>>,
-    pub standard_channels:
-        HashMap<ChannelId, StandardChannel<'static, DefaultJobStore<StandardJob<'static>>>>,
+    pub group_channel: GroupChannel<'static>,
+    pub extended_channels: HashMap<ChannelId, ExtendedChannel<'static>>,
+    pub standard_channels: HashMap<ChannelId, StandardChannel<'static>>,
     pub channel_id_factory: AtomicU32,
     /// Extensions that have been successfully negotiated with this client
     pub negotiated_extensions: Vec<u16>,
@@ -154,7 +149,7 @@ impl Downstream {
     pub fn new(
         downstream_id: DownstreamId,
         channel_id_factory: AtomicU32,
-        group_channel: GroupChannel<'static, DefaultJobStore<ExtendedJob<'static>>>,
+        group_channel: GroupChannel<'static>,
         channel_manager_sender: Sender<(DownstreamId, Mining<'static>, Option<Vec<Tlv>>)>,
         channel_manager_receiver: Receiver<(Mining<'static>, Option<Vec<Tlv>>)>,
         noise_stream: NoiseTcpStream<Message>,

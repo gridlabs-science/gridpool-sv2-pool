@@ -21,12 +21,7 @@ use stratum_apps::{
         bitcoin::{Amount, TxOut},
         channels_sv2::{
             extranonce_manager::{bytes_needed, ExtranonceAllocator},
-            server::{
-                extended::ExtendedChannel,
-                group::GroupChannel,
-                jobs::{extended::ExtendedJob, job_store::DefaultJobStore, standard::StandardJob},
-                standard::StandardChannel,
-            },
+            server::{extended::ExtendedChannel, group::GroupChannel, standard::StandardChannel},
             Vardiff, VardiffState,
         },
         handlers_sv2::{
@@ -222,10 +217,7 @@ impl ChannelManager {
     // Returns a `GroupChannel` if successful, otherwise returns `None`.
     //
     // To be called before calling Downstream::new.
-    fn bootstrap_group_channel(
-        &self,
-        channel_id: ChannelId,
-    ) -> Option<GroupChannel<'static, DefaultJobStore<ExtendedJob<'static>>>> {
+    fn bootstrap_group_channel(&self, channel_id: ChannelId) -> Option<GroupChannel<'static>> {
         let (last_future_template, last_set_new_prev_hash) =
             self.channel_manager_data.super_safe_lock(|data| {
                 (
@@ -239,7 +231,6 @@ impl ChannelManager {
             });
         let mut group_channel = match GroupChannel::new_for_pool(
             channel_id,
-            DefaultJobStore::new(),
             FULL_EXTRANONCE_SIZE as usize,
             self.pool_tag_string.clone(),
         ) {
@@ -519,7 +510,7 @@ impl ChannelManager {
     fn run_vardiff_on_extended_channel(
         downstream_id: DownstreamId,
         channel_id: ChannelId,
-        channel_state: &mut ExtendedChannel<'static, DefaultJobStore<ExtendedJob<'static>>>,
+        channel_state: &mut ExtendedChannel<'static>,
         vardiff_state: &mut VardiffState,
         updates: &mut Vec<RouteMessageTo>,
     ) {
@@ -567,7 +558,7 @@ impl ChannelManager {
     fn run_vardiff_on_standard_channel(
         downstream_id: DownstreamId,
         channel_id: ChannelId,
-        channel: &mut StandardChannel<'static, DefaultJobStore<StandardJob<'static>>>,
+        channel: &mut StandardChannel<'static>,
         vardiff_state: &mut VardiffState,
         updates: &mut Vec<RouteMessageTo>,
     ) {

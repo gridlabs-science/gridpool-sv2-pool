@@ -7,7 +7,6 @@ use stratum_apps::stratum_core::{
         server::{
             error::{ExtendedChannelError, StandardChannelError},
             extended::ExtendedChannel,
-            jobs::job_store::DefaultJobStore,
             share_accounting::{ShareValidationError, ShareValidationResult},
             standard::StandardChannel,
         },
@@ -169,9 +168,8 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                 let extranonce_prefix = channel_manager_data.extranonce_allocator.allocate_standard().map_err(PoolError::shutdown)?;
 
                 let channel_id = downstream_data.channel_id_factory.fetch_add(1, Ordering::SeqCst);
-                let job_store = DefaultJobStore::new();
 
-                let mut standard_channel = match StandardChannel::new_for_pool(channel_id, user_identity.to_string(), extranonce_prefix, requested_max_target, nominal_hash_rate, self.share_batch_size, self.shares_per_minute, job_store, self.pool_tag_string.clone()) {
+                let mut standard_channel = match StandardChannel::new_for_pool(channel_id, user_identity.to_string(), extranonce_prefix, requested_max_target, nominal_hash_rate, self.share_batch_size, self.shares_per_minute, self.pool_tag_string.clone()) {
                     Ok(channel) => channel,
                     Err(e) => match e {
                         StandardChannelError::OpenChannelInvalidNominalHashrate(code) => {
@@ -361,7 +359,6 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                         let channel_id = downstream_data
                             .channel_id_factory
                             .fetch_add(1, Ordering::SeqCst);
-                        let job_store = DefaultJobStore::new();
 
                         let mut extended_channel = match ExtendedChannel::new_for_pool(
                             channel_id,
@@ -373,7 +370,6 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                             CLIENT_SEARCH_SPACE_BYTES as u16,
                             self.share_batch_size,
                             self.shares_per_minute,
-                            job_store,
                             self.pool_tag_string.clone(),
                         ) {
                             Ok(channel) => channel,
