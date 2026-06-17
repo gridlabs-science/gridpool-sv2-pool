@@ -21,6 +21,8 @@ use std::{
     },
     time::{Duration, Instant},
 };
+#[cfg(feature = "monitoring")]
+use stratum_apps::monitoring::MinerTelemetry;
 use stratum_apps::{
     channel_utils::ReceiverCleanup,
     custom_mutex::Mutex,
@@ -115,6 +117,8 @@ pub struct Sv1Server {
     pub(crate) downstream_id_factory: Arc<AtomicUsize>,
     pub(crate) request_id_factory: Arc<AtomicU32>,
     pub(crate) downstreams: Arc<DashMap<DownstreamId, Downstream>>,
+    #[cfg(feature = "monitoring")]
+    pub(crate) miner_telemetry: Arc<DashMap<DownstreamId, MinerTelemetry>>,
     pub(crate) request_id_to_downstream_id: Arc<DashMap<RequestId, DownstreamId>>,
     pub(crate) channel_id_to_downstream_id: Arc<Mutex<HashMap<ChannelId, DownstreamId>>>,
     pub(crate) vardiff: Arc<DashMap<DownstreamId, Arc<Mutex<VardiffState>>>>,
@@ -248,6 +252,8 @@ impl Sv1Server {
             self.vardiff.clear();
         }
         self.downstreams.clear();
+        #[cfg(feature = "monitoring")]
+        self.miner_telemetry.clear();
         self.channel_id_to_downstream_id
             .super_safe_lock(|map| map.clear());
         self.request_id_to_downstream_id.clear();
@@ -287,6 +293,8 @@ impl Sv1Server {
             downstream_id_factory: Arc::new(AtomicUsize::new(1)),
             request_id_factory: Arc::new(AtomicU32::new(1)),
             downstreams: Arc::new(DashMap::new()),
+            #[cfg(feature = "monitoring")]
+            miner_telemetry: Arc::new(DashMap::new()),
             request_id_to_downstream_id: Arc::new(DashMap::new()),
             channel_id_to_downstream_id: Arc::new(Mutex::new(HashMap::new())),
             vardiff: Arc::new(DashMap::new()),
@@ -413,6 +421,8 @@ impl Sv1Server {
                                     sv1_server_receiver,
                                     first_target,
                                     Some(self.config.downstream_difficulty_config.min_individual_miner_hashrate),
+                                    #[cfg(feature = "monitoring")]
+                                    addr.ip(),
                                     connection_token,
                                 );
                                 // vardiff initialization (only if enabled)
@@ -1009,6 +1019,8 @@ impl Sv1Server {
             // Only remove from vardiff map if vardiff is enabled
             self.vardiff.remove(&downstream_id);
         }
+        #[cfg(feature = "monitoring")]
+        self.miner_telemetry.remove(&downstream_id);
         self.sv1_server_io
             .sv1_server_to_downstream_sender
             .super_safe_lock(|map| map.remove(&downstream_id));

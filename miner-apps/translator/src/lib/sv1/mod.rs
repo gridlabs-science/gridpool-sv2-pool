@@ -13,7 +13,7 @@
 
 mod downstream;
 #[cfg(feature = "monitoring")]
-pub mod monitoring;
+mod monitoring;
 mod sv1_server;
 pub use downstream::Downstream;
 pub use sv1_server::Sv1Server;

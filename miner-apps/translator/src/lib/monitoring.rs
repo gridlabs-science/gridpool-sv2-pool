@@ -2,7 +2,7 @@
 //!
 //! This module implements the ServerMonitoring trait on `ChannelManager`.
 //! tProxy has server channels (upstream to pool) but no SV2 clients
-//! (SV1 clients are handled separately in sv1::monitoring).
+//! (SV1 clients are handled separately by the SV1 monitoring module).
 
 use stratum_apps::monitoring::server::{ServerExtendedChannelInfo, ServerInfo, ServerMonitoring};
 

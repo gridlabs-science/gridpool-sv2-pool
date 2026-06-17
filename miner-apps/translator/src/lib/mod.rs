@@ -185,59 +185,21 @@ impl TranslatorSv2 {
         )
         .await;
 
-        // Start monitoring server if configured
+        // Start monitoring tasks if configured
         #[cfg(feature = "monitoring")]
         if let Some(monitoring_addr) = self.config.monitoring_address() {
-            info!(
-                "Initializing monitoring server on http://{}",
-                monitoring_addr
-            );
-
-            let monitoring_server = stratum_apps::monitoring::MonitoringServer::new(
+            info!("Initializing monitoring server on http://{monitoring_addr}");
+            if let Err(e) = self.start_monitoring_tasks(
                 monitoring_addr,
-                Some(channel_manager.clone()), // SV2 channels opened with servers
-                None,                          /* no SV2 channels opened with clients (SV1
-                                                * handled separately) */
-                std::time::Duration::from_secs(
-                    self.config.monitoring_cache_refresh_secs().unwrap_or(15),
-                ),
-            )
-            .expect("Failed to initialize monitoring server")
-            .with_sv1_monitoring(sv1_server.clone()) // SV1 client connections
-            .expect("Failed to add SV1 monitoring");
-
-            // Create shutdown signal using cancellation token
-            let cancellation_token_clone = cancellation_token.clone();
-            let fallback_coordinator_token = fallback_coordinator.token();
-            let shutdown_signal = async move {
-                tokio::select! {
-                    _ = cancellation_token_clone.cancelled() => {
-                        info!("Monitoring server: received shutdown signal.");
-                    }
-                    _ = fallback_coordinator_token.cancelled() => {
-                        info!("Monitoring server: fallback triggered.");
-                    }
-                }
-            };
-
-            let fallback_coordinator_clone = fallback_coordinator.clone();
-            task_manager.spawn({
-                let cancellation_token = cancellation_token.clone();
-                async move {
-                    // we just spawned a new task that's relevant to fallback coordination
-                    // so register it with the fallback coordinator
-                    let fallback_handler = fallback_coordinator_clone.register();
-
-                    if let Err(e) = monitoring_server.run(shutdown_signal).await {
-                        error!("Monitoring server error: {:?}", e);
-                        cancellation_token.cancel();
-                    }
-
-                    // signal fallback coordinator that this task has completed its cleanup
-                    fallback_handler.done();
-                    info!("Monitoring server task exited and signaled fallback coordinator");
-                }
-            });
+                channel_manager.clone(),
+                sv1_server.clone(),
+                cancellation_token.clone(),
+                fallback_coordinator.clone(),
+                task_manager.clone(),
+            ) {
+                error!("Failed to initialize monitoring tasks: {e}");
+                cancellation_token.cancel();
+            }
         }
 
         let mut fallback_token = fallback_coordinator.token();
@@ -315,53 +277,22 @@ impl TranslatorSv2 {
                                 )
                                 .await;
 
-                                // Recreate monitoring server with new components
+                                // Recreate monitoring tasks with new components
                                 #[cfg(feature = "monitoring")]
                                 if let Some(monitoring_addr) = self.config.monitoring_address() {
-                                    info!(
-                                        "Reinitializing monitoring server on http://{}",
-                                        monitoring_addr
-                                    );
-
-                                    let monitoring_server = stratum_apps::monitoring::MonitoringServer::new(
+                                    info!("Reinitializing monitoring server on http://{monitoring_addr}");
+                                    if let Err(e) = self.start_monitoring_tasks(
                                         monitoring_addr,
-                                        Some(channel_manager.clone()),
-                                        None,
-                                        std::time::Duration::from_secs(self.config.monitoring_cache_refresh_secs().unwrap_or(15)),
-                                    )
-                                    .expect("Failed to initialize monitoring server")
-                                    .with_sv1_monitoring(sv1_server.clone())
-                                    .expect("Failed to add SV1 monitoring");
-
-                                    let cancellation_token_clone = cancellation_token.clone();
-                                    let fallback_coordinator_token = fallback_coordinator.token();
-                                    let shutdown_signal = async move {
-                                        tokio::select! {
-                                            _ = cancellation_token_clone.cancelled() => {
-                                                info!("Monitoring server: received shutdown signal.");
-                                            }
-                                            _ = fallback_coordinator_token.cancelled() => {
-                                                info!("Monitoring server: fallback triggered.");
-                                            }
-                                        }
-                                    };
-
-                                    let monitoring_fallback = fallback_coordinator.clone();
-                                    task_manager.spawn({
-                                        let cancellation_token = cancellation_token.clone();
-                                        async move {
-                                            let fallback_handler = monitoring_fallback.register();
-
-                                            if let Err(e) = monitoring_server.run(shutdown_signal).await {
-                                                error!("Monitoring server error: {:?}", e);
-                                                cancellation_token.cancel();
-                                            }
-
-                                            // signal fallback coordinator that this task has completed its cleanup
-                                            fallback_handler.done();
-                                            info!("Monitoring server task exited and signaled fallback coordinator");
-                                        }
-                                    });
+                                        channel_manager.clone(),
+                                        sv1_server.clone(),
+                                        cancellation_token.clone(),
+                                        fallback_coordinator.clone(),
+                                        task_manager.clone(),
+                                    ) {
+                                        error!("Failed to reinitialize monitoring tasks: {e}");
+                                        cancellation_token.cancel();
+                                        break;
+                                    }
                                 }
 
                                 info!("Upstream and ChannelManager restarted successfully.");
@@ -401,6 +332,84 @@ impl TranslatorSv2 {
         self.shutdown_notify.notify_waiters();
         self.is_alive.store(false, Ordering::Relaxed);
         info!("TranslatorSv2 shutdown complete.");
+    }
+
+    #[cfg(feature = "monitoring")]
+    fn start_monitoring_tasks(
+        &self,
+        monitoring_addr: SocketAddr,
+        channel_manager: Arc<ChannelManager>,
+        sv1_server: Arc<Sv1Server>,
+        cancellation_token: CancellationToken,
+        fallback_coordinator: FallbackCoordinator,
+        task_manager: Arc<TaskManager>,
+    ) -> Result<(), TproxyErrorKind> {
+        let refresh_interval =
+            Duration::from_secs(self.config.monitoring_cache_refresh_secs().unwrap_or(15));
+
+        let monitoring_server = stratum_apps::monitoring::MonitoringServer::new(
+            monitoring_addr,
+            Some(channel_manager.clone()), // SV2 channels opened with servers
+            None,                          /* no SV2 channels opened with clients (SV1
+                                            * handled separately) */
+            refresh_interval,
+        )
+        .map_err(|e| {
+            TproxyErrorKind::General(format!("failed to initialize monitoring server: {e}"))
+        })?
+        .with_sv1_monitoring(sv1_server.clone()) // SV1 client connections
+        .map_err(|e| TproxyErrorKind::General(format!("failed to add SV1 monitoring: {e}")))?;
+
+        // Create shutdown signal using cancellation token
+        let cancellation_token_clone = cancellation_token.clone();
+        let fallback_coordinator_token = fallback_coordinator.token();
+        let shutdown_signal = async move {
+            tokio::select! {
+                _ = cancellation_token_clone.cancelled() => {
+                    info!("Monitoring server: received shutdown signal.");
+                }
+                _ = fallback_coordinator_token.cancelled() => {
+                    info!("Monitoring server: fallback triggered.");
+                }
+            }
+        };
+
+        let monitoring_fallback = fallback_coordinator.clone();
+        task_manager.spawn({
+            let cancellation_token = cancellation_token.clone();
+            async move {
+                // we just spawned a new task that's relevant to fallback coordination
+                // so register it with the fallback coordinator
+                let fallback_handler = monitoring_fallback.register();
+
+                if let Err(e) = monitoring_server.run(shutdown_signal).await {
+                    error!("Monitoring server error: {:?}", e);
+                    cancellation_token.cancel();
+                }
+
+                // signal fallback coordinator that this task has completed its cleanup
+                fallback_handler.done();
+                info!("Monitoring server task exited and signaled fallback coordinator");
+            }
+        });
+
+        let telemetry_fallback = fallback_coordinator.clone();
+        task_manager.spawn({
+            let cancellation_token = cancellation_token.clone();
+            async move {
+                let fallback_token = telemetry_fallback.token();
+                let fallback_handler = telemetry_fallback.register();
+
+                sv1_server
+                    .run_miner_telemetry_loop(refresh_interval, cancellation_token, fallback_token)
+                    .await;
+
+                fallback_handler.done();
+                info!("SV1 miner telemetry task exited and signaled fallback coordinator");
+            }
+        });
+
+        Ok(())
     }
 
     pub async fn shutdown(&self) {
