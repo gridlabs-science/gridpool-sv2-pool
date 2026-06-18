@@ -199,7 +199,7 @@ impl BitcoinCoreSv2JDP {
     async fn new_thread_ipc_client(&self) -> Result<ThreadIpcClient, BitcoinCoreSv2JDPError> {
         let thread_request = self.thread_map.make_thread_request();
         let thread_response = thread_request.send().promise.await.map_err(|e| {
-            let details = format!("Failed to send make_thread request: {}", e);
+            let details = format!("Failed to send make_thread request: {e}");
             tracing::error!("{}", details);
             BitcoinCoreSv2JDPError::FailedToCreateThreadIpcClient(details)
         })?;
@@ -207,13 +207,13 @@ impl BitcoinCoreSv2JDP {
         let thread_ipc_client = thread_response
             .get()
             .map_err(|e| {
-                let details = format!("Failed to read make_thread response: {}", e);
+                let details = format!("Failed to read make_thread response: {e}");
                 tracing::error!("{}", details);
                 BitcoinCoreSv2JDPError::FailedToCreateThreadIpcClient(details)
             })?
             .get_result()
             .map_err(|e| {
-                let details = format!("Failed to get thread IPC client: {}", e);
+                let details = format!("Failed to get thread IPC client: {e}");
                 tracing::error!("{}", details);
                 BitcoinCoreSv2JDPError::FailedToCreateThreadIpcClient(details)
             })?;

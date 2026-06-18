@@ -13,7 +13,7 @@ ALL_WORKSPACES="$POOL_WORKSPACE $MINER_WORKSPACE $INTEGRATION_WORKSPACE"
 
 for workspace in $ALL_WORKSPACES; do
     echo "Executing build on: $workspace"
-    cargo +1.85.0 build --manifest-path="$workspace/Cargo.toml" -- 
+    cargo +1.88.0 build --manifest-path="$workspace/Cargo.toml" -- 
     if [ $? -ne 0 ]; then
         echo "Build found some errors in: $workspace"
         exit 1

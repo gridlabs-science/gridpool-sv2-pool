@@ -1,5 +1,7 @@
 //! HTTP server for exposing monitoring data using Axum
 
+#[cfg(feature = "asic-rs-telemetry")]
+use super::miner_telemetry::MinerTelemetry;
 use super::{
     client::{
         ExtendedChannelInfo, StandardChannelInfo, Sv2ClientInfo, Sv2ClientMetadata,
@@ -35,6 +37,10 @@ use utoipa::{IntoParams, OpenApi, ToSchema};
 use utoipa_swagger_ui::SwaggerUi;
 
 #[derive(OpenApi)]
+#[cfg_attr(
+    feature = "asic-rs-telemetry",
+    openapi(components(schemas(MinerTelemetry)))
+)]
 #[openapi(
     info(
         // This `info` block is the single source of truth for the API title
@@ -348,6 +354,8 @@ pub struct Sv2ClientResponse {
     pub extended_channels_count: usize,
     pub standard_channels_count: usize,
     pub total_hashrate: f32,
+    #[cfg(feature = "asic-rs-telemetry")]
+    pub miner_telemetry: Option<MinerTelemetry>,
 }
 
 #[derive(Serialize, Deserialize, Debug, ToSchema)]
@@ -643,12 +651,14 @@ async fn handle_client_by_id(
             extended_channels_count: client.extended_channels.len(),
             standard_channels_count: client.standard_channels.len(),
             total_hashrate: client.total_hashrate(),
+            #[cfg(feature = "asic-rs-telemetry")]
+            miner_telemetry: client.miner_telemetry.clone(),
         })
         .into_response(),
         None => (
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
-                error: format!("Sv2 client {} not found", client_id),
+                error: format!("Sv2 client {client_id} not found"),
             }),
         )
             .into_response(),
@@ -708,7 +718,7 @@ async fn handle_client_channels(
         None => (
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
-                error: format!("Sv2 client {} not found", client_id),
+                error: format!("Sv2 client {client_id} not found"),
             }),
         )
             .into_response(),
@@ -791,7 +801,7 @@ async fn handle_sv1_client_by_id(
         None => (
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
-                error: format!("Sv1 client {} not found", client_id),
+                error: format!("Sv1 client {client_id} not found"),
             }),
         )
             .into_response(),
@@ -828,7 +838,7 @@ async fn handle_prometheus_metrics(State(state): State<ServerState>) -> Response
             Err(e) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ErrorResponse {
-                    error: format!("UTF-8 error: {}", e),
+                    error: format!("UTF-8 error: {e}"),
                 }),
             )
                 .into_response(),
@@ -836,7 +846,7 @@ async fn handle_prometheus_metrics(State(state): State<ServerState>) -> Response
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
-                error: format!("Encoding error: {}", e),
+                error: format!("Encoding error: {e}"),
             }),
         )
             .into_response(),
@@ -954,14 +964,34 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "asic-rs-telemetry")]
+    fn create_miner_telemetry() -> MinerTelemetry {
+        MinerTelemetry {
+            make: Some("Acme".into()),
+            model: Some("HashBox".into()),
+            firmware_version: Some("1.2.3".into()),
+            reported_hashrate_hs: Some(100_000_000_000_000.0),
+            power_consumption_w: Some(3200.0),
+            efficiency_j_per_th: Some(32.0),
+            average_temperature_c: Some(68.0),
+            uptime_secs: Some(3600),
+            is_mining: Some(true),
+        }
+    }
+
     fn create_sv1_client_info(id: usize, hashrate: Option<f32>) -> Sv1ClientInfo {
         Sv1ClientInfo {
             client_id: id,
             channel_id: Some(id as u32),
+            connection_ip: format!("192.0.2.{}", id)
+                .parse()
+                .expect("test IP address must be valid"),
             authorized_worker_name: format!("worker-{}", id),
             user_identity: format!("miner-{}", id),
             target_hex: "00ff".into(),
             hashrate,
+            #[cfg(feature = "asic-rs-telemetry")]
+            miner_telemetry: None,
             stable_hashrate: false,
             extranonce1_hex: "aabb".into(),
             extranonce2_len: 8,
@@ -1211,6 +1241,8 @@ mod tests {
             client_id: 1,
             extended_channels: vec![create_extended_channel_info(1, 50.0)],
             standard_channels: vec![],
+            #[cfg(feature = "asic-rs-telemetry")]
+            miner_telemetry: None,
         }]));
 
         let app = build_test_app(
@@ -1331,11 +1363,15 @@ mod tests {
                 client_id: 1,
                 extended_channels: vec![create_extended_channel_info(1, 100.0)],
                 standard_channels: vec![],
+                #[cfg(feature = "asic-rs-telemetry")]
+                miner_telemetry: Some(create_miner_telemetry()),
             },
             Sv2ClientInfo {
                 client_id: 2,
                 extended_channels: vec![],
                 standard_channels: vec![create_standard_channel_info(1, 50.0)],
+                #[cfg(feature = "asic-rs-telemetry")]
+                miner_telemetry: None,
             },
         ]));
 
@@ -1352,6 +1388,14 @@ mod tests {
         assert_eq!(resp.total, 2);
         assert_eq!(resp.items.len(), 2);
         assert_eq!(resp.items[0].client_id, 1);
+        #[cfg(feature = "asic-rs-telemetry")]
+        assert_eq!(
+            resp.items[0]
+                .miner_telemetry
+                .as_ref()
+                .and_then(|telemetry| telemetry.model.as_deref()),
+            Some("HashBox")
+        );
     }
 
     #[tokio::test]
@@ -1360,6 +1404,8 @@ mod tests {
             client_id: 42,
             extended_channels: vec![create_extended_channel_info(1, 100.0)],
             standard_channels: vec![create_standard_channel_info(2, 50.0)],
+            #[cfg(feature = "asic-rs-telemetry")]
+            miner_telemetry: Some(create_miner_telemetry()),
         }]));
 
         let app = build_test_app(
@@ -1378,6 +1424,13 @@ mod tests {
         assert_eq!(resp.client_id, 42);
         assert_eq!(resp.extended_channels_count, 1);
         assert_eq!(resp.standard_channels_count, 1);
+        #[cfg(feature = "asic-rs-telemetry")]
+        assert_eq!(
+            resp.miner_telemetry
+                .as_ref()
+                .and_then(|telemetry| telemetry.model.as_deref()),
+            Some("HashBox")
+        );
     }
 
     #[tokio::test]
@@ -1386,6 +1439,8 @@ mod tests {
             client_id: 1,
             extended_channels: vec![],
             standard_channels: vec![],
+            #[cfg(feature = "asic-rs-telemetry")]
+            miner_telemetry: None,
         }]));
 
         let app = build_test_app(
@@ -1410,6 +1465,8 @@ mod tests {
                 create_extended_channel_info(12, 300.0),
             ],
             standard_channels: vec![create_standard_channel_info(20, 50.0)],
+            #[cfg(feature = "asic-rs-telemetry")]
+            miner_telemetry: None,
         }]));
 
         let app = build_test_app(
@@ -1514,6 +1571,8 @@ mod tests {
             client_id: 1,
             extended_channels: vec![create_extended_channel_info(1, 50.0)],
             standard_channels: vec![],
+            #[cfg(feature = "asic-rs-telemetry")]
+            miner_telemetry: None,
         }]));
 
         let app = build_test_app(
@@ -1569,6 +1628,8 @@ mod tests {
             client_id: 1,
             extended_channels: vec![create_extended_channel_info(1, 100.0), channel_2],
             standard_channels: vec![],
+            #[cfg(feature = "asic-rs-telemetry")]
+            miner_telemetry: None,
         }];
 
         let mock_clients = Arc::new(MutableMockClients(Mutex::new(initial_clients)));
@@ -1676,6 +1737,8 @@ mod tests {
             client_id: 1,
             extended_channels: vec![create_extended_channel_info(1, 100.0)],
             standard_channels: vec![],
+            #[cfg(feature = "asic-rs-telemetry")]
+            miner_telemetry: None,
         }]));
 
         let app = build_test_app(
@@ -1753,6 +1816,8 @@ mod tests {
             client_id: 1,
             extended_channels: vec![],
             standard_channels: vec![],
+            #[cfg(feature = "asic-rs-telemetry")]
+            miner_telemetry: None,
         }]));
 
         let app = build_test_app(
@@ -1804,16 +1869,22 @@ mod tests {
                 client_id: 1,
                 extended_channels: vec![create_extended_channel_info(1, 100.0)],
                 standard_channels: vec![],
+                #[cfg(feature = "asic-rs-telemetry")]
+                miner_telemetry: None,
             },
             Sv2ClientInfo {
                 client_id: 2,
                 extended_channels: vec![],
                 standard_channels: vec![create_standard_channel_info(1, 50.0)],
+                #[cfg(feature = "asic-rs-telemetry")]
+                miner_telemetry: None,
             },
             Sv2ClientInfo {
                 client_id: 3,
                 extended_channels: vec![create_extended_channel_info(2, 200.0)],
                 standard_channels: vec![],
+                #[cfg(feature = "asic-rs-telemetry")]
+                miner_telemetry: None,
             },
         ]));
 

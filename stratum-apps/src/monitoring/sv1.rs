@@ -3,6 +3,10 @@
 //! These types are specific to SV1 protocol client connections.
 //! Used by Translator Proxy (tProxy) that accepts SV1 miner connections.
 
+use std::net::IpAddr;
+
+#[cfg(feature = "asic-rs-telemetry")]
+pub use super::miner_telemetry::MinerTelemetry;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -11,6 +15,8 @@ use utoipa::ToSchema;
 pub struct Sv1ClientInfo {
     pub client_id: usize,
     pub channel_id: Option<u32>,
+    #[schema(value_type = String)]
+    pub connection_ip: IpAddr,
     pub authorized_worker_name: String,
     pub user_identity: String,
     pub target_hex: String,
@@ -20,6 +26,8 @@ pub struct Sv1ClientInfo {
     pub extranonce2_len: usize,
     pub version_rolling_mask: Option<String>,
     pub version_rolling_min_bit: Option<String>,
+    #[cfg(feature = "asic-rs-telemetry")]
+    pub miner_telemetry: Option<MinerTelemetry>,
 }
 
 /// Aggregate information about SV1 client connections
@@ -63,6 +71,9 @@ mod tests {
         Sv1ClientInfo {
             client_id: id,
             channel_id: Some(id as u32),
+            connection_ip: format!("192.0.2.{}", id)
+                .parse()
+                .expect("test IP address must be valid"),
             authorized_worker_name: format!("worker-{}", id),
             user_identity: format!("miner-{}", id),
             target_hex: "00ff".into(),
@@ -72,6 +83,8 @@ mod tests {
             extranonce2_len: 8,
             version_rolling_mask: Some("ffffffff".into()),
             version_rolling_min_bit: Some("00000000".into()),
+            #[cfg(feature = "asic-rs-telemetry")]
+            miner_telemetry: None,
         }
     }
 

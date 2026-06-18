@@ -7,6 +7,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use utoipa::ToSchema;
 
+#[cfg(feature = "asic-rs-telemetry")]
+use super::miner_telemetry::MinerTelemetry;
+
 /// Information about an extended channel
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ExtendedChannelInfo {
@@ -61,9 +64,25 @@ pub struct Sv2ClientInfo {
     pub client_id: usize,
     pub extended_channels: Vec<ExtendedChannelInfo>,
     pub standard_channels: Vec<StandardChannelInfo>,
+    #[cfg(feature = "asic-rs-telemetry")]
+    pub miner_telemetry: Option<MinerTelemetry>,
 }
 
 impl Sv2ClientInfo {
+    pub fn new(
+        client_id: usize,
+        extended_channels: Vec<ExtendedChannelInfo>,
+        standard_channels: Vec<StandardChannelInfo>,
+    ) -> Self {
+        Self {
+            client_id,
+            extended_channels,
+            standard_channels,
+            #[cfg(feature = "asic-rs-telemetry")]
+            miner_telemetry: None,
+        }
+    }
+
     /// Get total number of channels for this client
     pub fn total_channels(&self) -> usize {
         self.extended_channels.len() + self.standard_channels.len()
@@ -89,6 +108,8 @@ impl Sv2ClientInfo {
             extended_channels_count: self.extended_channels.len(),
             standard_channels_count: self.standard_channels.len(),
             total_hashrate: self.total_hashrate(),
+            #[cfg(feature = "asic-rs-telemetry")]
+            miner_telemetry: self.miner_telemetry.clone(),
         }
     }
 }
@@ -100,6 +121,8 @@ pub struct Sv2ClientMetadata {
     pub extended_channels_count: usize,
     pub standard_channels_count: usize,
     pub total_hashrate: f32,
+    #[cfg(feature = "asic-rs-telemetry")]
+    pub miner_telemetry: Option<MinerTelemetry>,
 }
 
 /// Aggregate information about all Sv2 clients
@@ -210,6 +233,8 @@ mod tests {
             client_id: id,
             extended_channels: ext,
             standard_channels: std,
+            #[cfg(feature = "asic-rs-telemetry")]
+            miner_telemetry: None,
         }
     }
 
@@ -252,6 +277,8 @@ mod tests {
         assert_eq!(meta.extended_channels_count, 1);
         assert_eq!(meta.standard_channels_count, 2);
         assert_eq!(meta.total_hashrate, 225.0);
+        #[cfg(feature = "asic-rs-telemetry")]
+        assert!(meta.miner_telemetry.is_none());
     }
 
     // ── ClientsMonitoring trait default implementations ─────────────

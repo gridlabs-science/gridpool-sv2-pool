@@ -9,9 +9,12 @@ use hex;
 use stratum_apps::monitoring::{
     client::{ExtendedChannelInfo, StandardChannelInfo, Sv2ClientInfo, Sv2ClientsMonitoring},
     server::{ServerExtendedChannelInfo, ServerInfo, ServerMonitoring},
+    MinerTelemetry, MinerTelemetryCollector,
 };
 
 use crate::{channel_manager::ChannelManager, downstream::Downstream};
+use std::{collections::HashSet, net::IpAddr, time::Duration};
+use tracing::{debug, info};
 
 impl ServerMonitoring for ChannelManager {
     fn get_server(&self) -> ServerInfo {
@@ -66,7 +69,10 @@ impl ServerMonitoring for ChannelManager {
 
 /// Helper to convert a Downstream to Sv2ClientInfo.
 /// Returns None if the lock cannot be acquired (graceful degradation for monitoring).
-fn downstream_to_sv2_client_info(client: &Downstream) -> Option<Sv2ClientInfo> {
+fn downstream_to_sv2_client_info(
+    client: &Downstream,
+    miner_telemetry: Option<MinerTelemetry>,
+) -> Option<Sv2ClientInfo> {
     client
         .downstream_data
         .safe_lock(|dd| {
@@ -143,6 +149,7 @@ fn downstream_to_sv2_client_info(client: &Downstream) -> Option<Sv2ClientInfo> {
                 client_id: client.downstream_id,
                 extended_channels,
                 standard_channels,
+                miner_telemetry,
             }
         })
         .ok()
@@ -159,17 +166,132 @@ impl Sv2ClientsMonitoring for ChannelManager {
 
         downstream_refs
             .iter()
-            .filter_map(downstream_to_sv2_client_info)
+            .filter_map(|downstream| {
+                let miner_telemetry = self.miner_telemetry_for(downstream.downstream_id);
+                downstream_to_sv2_client_info(downstream, miner_telemetry)
+            })
             .collect()
     }
 
     fn get_sv2_client_by_id(&self, client_id: usize) -> Option<Sv2ClientInfo> {
+        let miner_telemetry = self.miner_telemetry_for(client_id);
         self.channel_manager_data
             .safe_lock(|d| {
-                d.downstream
-                    .get(&client_id)
-                    .and_then(downstream_to_sv2_client_info)
+                d.downstream.get(&client_id).and_then(|downstream| {
+                    downstream_to_sv2_client_info(downstream, miner_telemetry)
+                })
             })
             .unwrap_or(None)
+    }
+}
+
+impl ChannelManager {
+    pub(crate) fn miner_telemetry_for(&self, downstream_id: usize) -> Option<MinerTelemetry> {
+        self.miner_telemetry
+            .safe_lock(|telemetry| telemetry.get(&downstream_id).cloned())
+            .unwrap_or(None)
+    }
+
+    pub(crate) async fn run_miner_telemetry_loop(
+        &self,
+        refresh_interval: Duration,
+        cancellation_token: bitcoin_core_sv2::template_distribution_protocol::CancellationToken,
+        fallback_token: bitcoin_core_sv2::template_distribution_protocol::CancellationToken,
+    ) {
+        let refresh_interval = refresh_interval.max(Duration::from_secs(1));
+        let collector = MinerTelemetryCollector::new();
+        let mut interval = tokio::time::interval(refresh_interval);
+
+        info!(
+            "Starting JDC miner telemetry loop with interval of {} seconds",
+            refresh_interval.as_secs()
+        );
+
+        loop {
+            tokio::select! {
+                _ = cancellation_token.cancelled() => {
+                    info!("JDC miner telemetry loop received shutdown signal");
+                    break;
+                }
+                _ = fallback_token.cancelled() => {
+                    info!("JDC miner telemetry loop received fallback signal");
+                    break;
+                }
+                _ = interval.tick() => {
+                    tokio::select! {
+                        _ = cancellation_token.cancelled() => {
+                            info!("JDC miner telemetry loop received shutdown signal");
+                            break;
+                        }
+                        _ = fallback_token.cancelled() => {
+                            info!("JDC miner telemetry loop received fallback signal");
+                            break;
+                        }
+                        _ = self.refresh_miner_telemetry(&collector) => {}
+                    }
+                }
+            }
+        }
+    }
+
+    async fn refresh_miner_telemetry(&self, collector: &MinerTelemetryCollector) {
+        let downstreams = self.current_downstream_connection_ips();
+        let active_downstream_ids = downstreams
+            .iter()
+            .map(|(downstream_id, _)| *downstream_id)
+            .collect::<HashSet<_>>();
+
+        let _ = self.miner_telemetry.safe_lock(|telemetry| {
+            telemetry.retain(|downstream_id, _| active_downstream_ids.contains(downstream_id));
+        });
+
+        if downstreams.is_empty() {
+            return;
+        }
+
+        for (downstream_id, ip) in downstreams {
+            match collector.fetch(ip).await {
+                Some(telemetry) => {
+                    let is_active = self
+                        .channel_manager_data
+                        .safe_lock(|data| data.downstream.contains_key(&downstream_id))
+                        .unwrap_or(false);
+
+                    if is_active {
+                        let _ = self
+                            .miner_telemetry
+                            .safe_lock(|cache| cache.insert(downstream_id, telemetry));
+                    }
+                }
+                None => {
+                    let _ = self
+                        .miner_telemetry
+                        .safe_lock(|cache| cache.remove(&downstream_id));
+                }
+            }
+        }
+    }
+
+    fn current_downstream_connection_ips(&self) -> Vec<(usize, IpAddr)> {
+        let downstream_refs: Vec<Downstream> = self
+            .channel_manager_data
+            .safe_lock(|data| data.downstream.values().cloned().collect())
+            .unwrap_or_default();
+
+        downstream_refs
+            .iter()
+            .filter_map(|downstream| {
+                downstream
+                    .downstream_data
+                    .safe_lock(|data| (downstream.downstream_id, data.connection_ip))
+                    .map_err(|error| {
+                        debug!(
+                            downstream_id = downstream.downstream_id,
+                            "Failed to lock downstream data for telemetry: {error}"
+                        );
+                    })
+                    .ok()
+            })
+            .collect()
     }
 }

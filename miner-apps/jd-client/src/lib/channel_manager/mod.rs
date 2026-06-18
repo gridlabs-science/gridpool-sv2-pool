@@ -61,6 +61,8 @@ use crate::{
         SharesOrderedByDiff, UpstreamState,
     },
 };
+#[cfg(feature = "monitoring")]
+use stratum_apps::monitoring::MinerTelemetry;
 pub mod downstream_message_handler;
 mod extensions_message_handler;
 mod jd_message_handler;
@@ -300,6 +302,8 @@ pub struct ChannelManager {
     /// 4. SoloMining: No upstream is available; the JDC operates in solo mining mode. case.
     pub upstream_state: AtomicUpstreamState,
     pub mode: JDMode,
+    #[cfg(feature = "monitoring")]
+    pub(crate) miner_telemetry: Arc<Mutex<HashMap<DownstreamId, MinerTelemetry>>>,
 }
 
 #[cfg_attr(not(test), hotpath::measure_all)]
@@ -433,6 +437,8 @@ impl ChannelManager {
                 .reserved_downstream_rollable_extranonce_size(),
             upstream_state: AtomicUpstreamState::new(UpstreamState::SoloMining),
             mode,
+            #[cfg(feature = "monitoring")]
+            miner_telemetry: Arc::new(Mutex::new(HashMap::new())),
         };
 
         Ok(channel_manager)
@@ -643,6 +649,8 @@ impl ChannelManager {
                                         task_manager_inner.clone(),
                                         supported_extensions_inner,
                                         required_extensions_inner,
+                                        #[cfg(feature = "monitoring")]
+                                        socket_address.ip(),
                                     );
 
                                     this.channel_manager_io.downstream_sender.super_safe_lock(|map| map.insert(downstream_id, channel_manager_sender_downstream));

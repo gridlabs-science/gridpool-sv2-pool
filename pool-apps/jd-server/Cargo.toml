@@ -16,7 +16,7 @@ name = "jd_server_sv2"
 path = "src/lib/mod.rs"
 
 [dependencies]
-stratum-apps = { version = "0.5.0", path = "../../stratum-apps", features = ["jd_server"] }
+stratum-apps = { version = "0.6.0", path = "../../stratum-apps", features = ["jd_server"] }
 async-channel = "1.5.1"
 
 bitcoin_core_sv2 = { version = "0.3.0", path = "../../bitcoin-core-sv2" }

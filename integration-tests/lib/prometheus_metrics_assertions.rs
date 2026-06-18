@@ -109,9 +109,8 @@ impl MonitoringApi {
         let (status, bytes) = self.http_get_with_status(routes::METRICS).await;
         assert!(
             (200..300).contains(&status),
-            "GET {} returned non-2xx status {}",
-            routes::METRICS,
-            status
+            "GET {} returned non-2xx status {status}",
+            routes::METRICS
         );
         String::from_utf8(bytes).expect("metrics response should be valid UTF-8")
     }
@@ -122,9 +121,7 @@ impl MonitoringApi {
         let (status, bytes) = self.http_get_with_status(path).await;
         assert!(
             (200..300).contains(&status),
-            "GET {} returned non-2xx status {}",
-            path,
-            status
+            "GET {path} returned non-2xx status {status}"
         );
         String::from_utf8(bytes).expect("api response should be valid UTF-8")
     }
@@ -235,8 +232,7 @@ impl MonitoringApi {
             }
             if tokio::time::Instant::now() >= deadline {
                 panic!(
-                    "Metric '{}' never reached >= {} within {:?}. Last /metrics response:\n{}",
-                    metric, min, timeout, metrics
+                    "Metric '{metric}' never reached >= {min} within {timeout:?}. Last /metrics response:\n{metrics}"
                 );
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
@@ -328,7 +324,7 @@ impl fmt::Display for Metric<'_> {
                 if i > 0 {
                     f.write_str(",")?;
                 }
-                write!(f, "{}=\"{}\"", k, v)?;
+                write!(f, "{k}=\"{v}\"")?;
             }
             f.write_str("}")?;
         }
@@ -389,17 +385,11 @@ pub(crate) fn assert_metric<'a, M, F>(
         Some(v) => {
             assert!(
                 predicate(v),
-                "Metric '{}' has value {} but expected: {}",
-                metric,
-                v,
-                description
+                "Metric '{metric}' has value {v} but expected: {description}"
             );
         }
         None => {
-            panic!(
-                "Metric '{}' not found in metrics output. Expected: {}",
-                metric, description
-            );
+            panic!("Metric '{metric}' not found in metrics output. Expected: {description}");
         }
     }
 }
@@ -410,7 +400,7 @@ pub fn assert_metric_eq<'a, M: Into<Metric<'a>>>(metrics_text: &str, metric: M, 
         metrics_text,
         metric,
         |v| (v - expected).abs() < f64::EPSILON,
-        &format!("== {}", expected),
+        &format!("== {expected}"),
     );
 }
 
@@ -427,8 +417,7 @@ pub fn assert_metric_not_present<'a, M: Into<Metric<'a>>>(metrics_text: &str, me
         }
         if metric.match_line(line).is_some() {
             panic!(
-                "Metric '{}' was found in metrics output but was expected to be absent. Line: {}",
-                metric, line
+                "Metric '{metric}' was found in metrics output but was expected to be absent. Line: {line}"
             );
         }
     }
@@ -445,10 +434,7 @@ pub fn assert_metric_present<'a, M: Into<Metric<'a>>>(metrics_text: &str, metric
             return;
         }
     }
-    panic!(
-        "Metric '{}' was expected to be present but was not found in metrics output",
-        metric
-    );
+    panic!("Metric '{metric}' was expected to be present but was not found in metrics output");
 }
 
 #[cfg(test)]

@@ -78,9 +78,9 @@ cargo install cargo-tarpaulin
 2. **Repository access** - You need to be a maintainer of the published crates
 
 ### For Development
-1. **Rust toolchain** (1.85.0 or later)
+1. **Rust toolchain** (1.88.0 or later)
    ```bash
-   rustup install 1.85.0
+   rustup install 1.88.0
    rustup install nightly  # for formatting
    ```
 

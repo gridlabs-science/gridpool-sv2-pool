@@ -23,6 +23,10 @@ Endpoints returning lists support pagination via `?offset=N&limit=M` query param
 
 Server and client endpoints return metadata only (counts, hashrate). Use `/channels` sub-resource for channel details.
 
+## OpenAPI Schema
+
+The committed `openapi.json` is generated with `monitoring,asic-rs-telemetry` and represents the superset schema used by downstream consumers such as `sv2-ui`. Runtime schemas exposed at `/api-docs/openapi.json` depend on the features used to build each app; apps built without `asic-rs-telemetry` omit miner telemetry fields.
+
 ## Traits
 
 Applications implement these traits on their data structures:

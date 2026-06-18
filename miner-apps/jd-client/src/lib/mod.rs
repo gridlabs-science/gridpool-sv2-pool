@@ -1,3 +1,5 @@
+#[cfg(feature = "monitoring")]
+use std::net::SocketAddr;
 use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -131,59 +133,16 @@ impl JobDeclaratorClient {
         // Start monitoring server if configured
         #[cfg(feature = "monitoring")]
         if let Some(monitoring_addr) = self.config.monitoring_address() {
-            info!(
-                "Initializing monitoring server on http://{}",
-                monitoring_addr
-            );
-
-            let monitoring_server = match stratum_apps::monitoring::MonitoringServer::new(
+            info!("Initializing monitoring server on http://{monitoring_addr}");
+            if let Err(e) = self.start_monitoring_tasks(
                 monitoring_addr,
-                Some(Arc::new(channel_manager.clone())), // SV2 channels opened with servers
-                Some(Arc::new(channel_manager.clone())), // SV2 channels opened with clients
-                std::time::Duration::from_secs(
-                    self.config.monitoring_cache_refresh_secs().unwrap_or(15),
-                ),
+                channel_manager.clone(),
+                self.cancellation_token.clone(),
+                fallback_coordinator.clone(),
+                task_manager.clone(),
             ) {
-                Ok(monitoring_server) => Some(monitoring_server),
-                Err(e) => {
-                    error!(error = ?e, "Failed to initialize monitoring server");
-                    None
-                }
-            };
-
-            if let Some(monitoring_server) = monitoring_server {
-                // Create shutdown signal using cancellation token
-                let cancellation_token_clone = self.cancellation_token.clone();
-                let fallback_coordinator_token = fallback_coordinator.token();
-                let shutdown_signal = async move {
-                    tokio::select! {
-                        _ = cancellation_token_clone.cancelled() => {
-                            info!("Monitoring server: received shutdown signal.");
-                        }
-                        _ = fallback_coordinator_token.cancelled() => {
-                            info!("Monitoring server: fallback triggered.");
-                        }
-                    }
-                };
-
-                let fallback_coordinator_clone = fallback_coordinator.clone();
-                task_manager.spawn({
-                    let cancellation_token = self.cancellation_token.clone();
-                    async move {
-                        // we just spawned a new task that's relevant to fallback coordination
-                        // so register it with the fallback coordinator
-                        let fallback_handler = fallback_coordinator_clone.register();
-
-                        if let Err(e) = monitoring_server.run(shutdown_signal).await {
-                            error!("Monitoring server error: {:?}", e);
-                            cancellation_token.cancel();
-                        }
-
-                        // signal fallback coordinator that this task has completed its cleanup
-                        fallback_handler.done();
-                        info!("Monitoring server task exited and signaled fallback coordinator");
-                    }
-                });
+                error!("Failed to initialize monitoring tasks: {e}");
+                self.cancellation_token.cancel();
             }
         }
 
@@ -525,60 +484,17 @@ impl JobDeclaratorClient {
                     // Reinitialize monitoring server if configured
                     #[cfg(feature = "monitoring")]
                     if let Some(monitoring_addr) = self.config.monitoring_address() {
-                        info!(
-                            "Reinitializing monitoring server on http://{}",
-                            monitoring_addr
-                        );
-
-                        let monitoring_server = match stratum_apps::monitoring::MonitoringServer::new(
+                        info!("Reinitializing monitoring server on http://{monitoring_addr}");
+                        if let Err(e) = self.start_monitoring_tasks(
                             monitoring_addr,
-                            Some(Arc::new(channel_manager.clone())),
-                            Some(Arc::new(channel_manager.clone())),
-                            std::time::Duration::from_secs(
-                                self.config.monitoring_cache_refresh_secs().map_or(15, |secs| secs),
-                            ),
-                        )
-                        {
-                            Ok(monitoring_server) => Some(monitoring_server),
-                            Err(e) => {
-                                error!(error = ?e, "Failed to initialize monitoring server");
-                                None
-                            }
-                        };
-
-                        if let Some(monitoring_server) = monitoring_server {
-                            let cancellation_token_clone = self.cancellation_token.clone();
-                            let fallback_coordinator_token = fallback_coordinator.token();
-                            let shutdown_signal = async move {
-                                tokio::select! {
-                                    _ = cancellation_token_clone.cancelled() => {
-                                        info!("Monitoring server: received shutdown signal.");
-                                    }
-                                    _ = fallback_coordinator_token.cancelled() => {
-                                        info!("Monitoring server: fallback triggered.");
-                                    }
-                                }
-                            };
-
-                            let fallback_coordinator_clone = fallback_coordinator.clone();
-                            task_manager.spawn({
-                                let cancellation_token = self.cancellation_token.clone();
-                                async move {
-                                    // we just spawned a new task that's relevant to fallback coordination
-                                    // so register it with the fallback coordinator
-                                    let fallback_handler = fallback_coordinator_clone.register();
-
-                                    if let Err(e) = monitoring_server.run(shutdown_signal).await {
-                                        error!("Monitoring server error: {:?}", e);
-                                        cancellation_token.cancel();
-                                    }
-
-                                    // signal that this task has completed its cleanup
-                                    // (no-op during normal shutdown, only matters during fallback)
-                                    fallback_handler.done();
-                                    info!("Monitoring server task exited and signaled fallback coordinator");
-                                }
-                            });
+                            channel_manager.clone(),
+                            self.cancellation_token.clone(),
+                            fallback_coordinator.clone(),
+                            task_manager.clone(),
+                        ) {
+                            error!("Failed to reinitialize monitoring tasks: {e}");
+                            self.cancellation_token.cancel();
+                            break;
                         }
                     }
 
@@ -655,6 +571,73 @@ impl JobDeclaratorClient {
         self.shutdown_notify.notify_waiters();
         self.is_alive.store(false, Ordering::Relaxed);
         info!("JD Client shutdown complete.");
+    }
+
+    #[cfg(feature = "monitoring")]
+    fn start_monitoring_tasks(
+        &self,
+        monitoring_addr: SocketAddr,
+        channel_manager: ChannelManager,
+        cancellation_token: CancellationToken,
+        fallback_coordinator: FallbackCoordinator,
+        task_manager: Arc<TaskManager>,
+    ) -> Result<(), String> {
+        let refresh_interval =
+            Duration::from_secs(self.config.monitoring_cache_refresh_secs().unwrap_or(15));
+
+        let monitoring_server = stratum_apps::monitoring::MonitoringServer::new(
+            monitoring_addr,
+            Some(Arc::new(channel_manager.clone())),
+            Some(Arc::new(channel_manager.clone())),
+            refresh_interval,
+        )
+        .map_err(|e| format!("failed to initialize monitoring server: {e}"))?;
+
+        let cancellation_token_clone = cancellation_token.clone();
+        let fallback_coordinator_token = fallback_coordinator.token();
+        let shutdown_signal = async move {
+            tokio::select! {
+                _ = cancellation_token_clone.cancelled() => {
+                    info!("Monitoring server: received shutdown signal.");
+                }
+                _ = fallback_coordinator_token.cancelled() => {
+                    info!("Monitoring server: fallback triggered.");
+                }
+            }
+        };
+
+        let monitoring_fallback = fallback_coordinator.clone();
+        task_manager.spawn({
+            let cancellation_token = cancellation_token.clone();
+            async move {
+                let fallback_handler = monitoring_fallback.register();
+
+                if let Err(e) = monitoring_server.run(shutdown_signal).await {
+                    error!("Monitoring server error: {:?}", e);
+                    cancellation_token.cancel();
+                }
+
+                fallback_handler.done();
+                info!("Monitoring server task exited and signaled fallback coordinator");
+            }
+        });
+
+        let telemetry_fallback = fallback_coordinator.clone();
+        task_manager.spawn({
+            async move {
+                let fallback_token = telemetry_fallback.token();
+                let fallback_handler = telemetry_fallback.register();
+
+                channel_manager
+                    .run_miner_telemetry_loop(refresh_interval, cancellation_token, fallback_token)
+                    .await;
+
+                fallback_handler.done();
+                info!("JDC miner telemetry task exited and signaled fallback coordinator");
+            }
+        });
+
+        Ok(())
     }
 
     pub async fn shutdown(&self) {

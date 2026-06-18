@@ -1,6 +1,6 @@
 [package]
 name = "stratum-apps"
-version = "0.5.0"
+version = "0.6.0"
 authors = ["The Stratum V2 Developers"]
 edition = "2021"
 readme = "README.md"
@@ -43,6 +43,7 @@ rustversion = "1.0"
 serde_json = { version = "1.0", default-features = false, features = ["alloc", "raw_value"], optional = true }
 
 # Monitoring optional dependencies
+asic-rs = { version = "0.6.0", optional = true }
 axum = { version = "0.8.7", optional = true }
 prometheus = { version = "0.13", optional = true }
 utoipa = { version = "5.4.0", features = ["axum_extras"], optional = true }
@@ -62,6 +63,7 @@ fallback-coordinator = ["tokio-util"]
 config = []
 payout = ["config", "core"]
 monitoring = ["serde_json", "axum", "prometheus", "utoipa", "utoipa-swagger-ui"]
+asic-rs-telemetry = ["monitoring", "dep:asic-rs"]
 std = ["bs58/std", "secp256k1/rand-std", "rand/std", "rand/std_rng"]
 core = ["stratum-core"]
 
@@ -89,4 +91,4 @@ path = "src/bin/generate-openapi.rs"
 required-features = ["monitoring"]
 
 [package.metadata.docs.rs]
-features = ["pool", "jd_client", "jd_server", "translator", "sv1", "monitoring"]
+features = ["pool", "jd_client", "jd_server", "translator", "sv1", "monitoring", "asic-rs-telemetry"]

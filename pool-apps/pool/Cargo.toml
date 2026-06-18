@@ -17,7 +17,7 @@ name = "pool_sv2"
 path = "src/lib/mod.rs"
 
 [dependencies]
-stratum-apps = { version = "0.5.0", path = "../../stratum-apps", features = ["pool"] }
+stratum-apps = { version = "0.6.0", path = "../../stratum-apps", features = ["pool"] }
 async-channel = "1.5.1"
 serde = { version = "1.0.89", features = ["derive", "alloc"], default-features = false }
 tokio = { version = "1.44.1", features = ["full"] }

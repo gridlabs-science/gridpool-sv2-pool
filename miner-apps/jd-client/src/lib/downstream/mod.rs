@@ -4,6 +4,9 @@ use std::{
     time::Duration,
 };
 
+#[cfg(feature = "monitoring")]
+use std::net::IpAddr;
+
 use async_channel::{unbounded, Receiver, Sender};
 use stratum_apps::{
     channel_utils::ReceiverCleanup,
@@ -43,6 +46,8 @@ mod extensions_message_handler;
 /// - Active [`ExtendedChannel`]s keyed by channel ID.
 /// - Active [`StandardChannel`]s keyed by channel ID.
 pub struct DownstreamData {
+    #[cfg(feature = "monitoring")]
+    pub connection_ip: IpAddr,
     pub require_std_job: bool,
     pub group_channel: GroupChannel<'static>,
     pub extended_channels: HashMap<ChannelId, ExtendedChannel<'static>>,
@@ -172,6 +177,7 @@ impl Downstream {
         task_manager: Arc<TaskManager>,
         supported_extensions: Vec<u16>,
         required_extensions: Vec<u16>,
+        #[cfg(feature = "monitoring")] connection_ip: IpAddr,
     ) -> Self {
         let (noise_stream_reader, noise_stream_writer) = noise_stream.into_split();
         let (inbound_tx, inbound_rx) = unbounded::<Sv2Frame>();
@@ -198,6 +204,8 @@ impl Downstream {
         };
 
         let downstream_data = Arc::new(Mutex::new(DownstreamData {
+            #[cfg(feature = "monitoring")]
+            connection_ip,
             require_std_job: false,
             extended_channels: HashMap::new(),
             standard_channels: HashMap::new(),

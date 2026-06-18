@@ -12,6 +12,8 @@
 //! - [`downstream`]: Defines the core [`Downstream`] struct and its functionalities.
 
 mod downstream;
+#[cfg(feature = "monitoring")]
+mod monitoring;
 mod sv1_server;
 pub use downstream::Downstream;
 pub use sv1_server::Sv1Server;

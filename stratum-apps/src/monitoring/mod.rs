@@ -11,6 +11,8 @@
 
 pub mod client;
 pub mod http_server;
+#[cfg(feature = "asic-rs-telemetry")]
+pub mod miner_telemetry;
 pub mod prometheus_metrics;
 pub mod routes;
 pub mod server;
@@ -26,6 +28,8 @@ pub use http_server::{
     ServerResponse, Sv1ClientsResponse, Sv2ClientChannelsResponse, Sv2ClientResponse,
     Sv2ClientsResponse,
 };
+#[cfg(feature = "asic-rs-telemetry")]
+pub use miner_telemetry::{MinerTelemetry, MinerTelemetryCollector};
 pub use server::{
     ServerExtendedChannelInfo, ServerInfo, ServerMonitoring, ServerStandardChannelInfo,
     ServerSummary,

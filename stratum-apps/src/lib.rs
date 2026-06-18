@@ -12,6 +12,7 @@
 //! - `config` - Configuration management helpers (enabled by default)
 //! - `payout` - Shared payout-mode parsing and coinbase-output distribution helpers
 //! - `monitoring` - HTTP and Prometheus monitoring helpers (optional)
+//! - `asic-rs-telemetry` - Optional miner telemetry helpers powered by `asic-rs`
 //! - `std` - Standard-library support for key and random utilities (enabled by default)
 //! - `core` - Re-export and enable `stratum-core`
 //!
