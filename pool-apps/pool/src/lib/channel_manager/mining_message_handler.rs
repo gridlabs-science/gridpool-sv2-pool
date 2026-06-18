@@ -56,7 +56,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
     ) -> Result<Vec<u16>, Self::Error> {
         let downstream_id =
             client_id.expect("client_id must be present for downstream_id extraction");
-        self.with_live_downstream(downstream_id, |downstream| {
+        self.with_registered_downstream(downstream_id, |downstream| {
             downstream
                 .negotiated_extensions
                 .get()
@@ -73,7 +73,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
         info!("Received Close Channel: {msg}");
         let downstream_id =
             client_id.expect("client_id must be present for downstream_id extraction");
-        self.with_live_downstream(downstream_id, |downstream| {
+        self.with_registered_downstream(downstream_id, |downstream| {
             downstream
                 .group_channel
                 .with(|group_channel| {
@@ -103,7 +103,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
 
         info!("Received OpenStandardMiningChannel: {}", msg);
 
-        let messages = self.with_live_downstream(downstream_id, |downstream| {
+        let messages = self.with_registered_downstream(downstream_id, |downstream| {
                 if downstream.requires_custom_work.load(Ordering::SeqCst) {
                     error!("OpenStandardMiningChannel: Standard Channels are not supported for this connection");
                     let open_standard_mining_channel_error = OpenMiningChannelError {
@@ -345,7 +345,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
             Target::from_le_bytes(msg.max_target.inner_as_ref().try_into().unwrap());
         let requested_min_rollable_extranonce_size = msg.min_extranonce_size;
 
-        let messages = self.with_live_downstream(downstream_id, |downstream| {
+        let messages = self.with_registered_downstream(downstream_id, |downstream| {
                 if downstream.requires_standard_jobs.load(Ordering::SeqCst) {
                     let open_extended_mining_channel_error = OpenMiningChannelError {
                             request_id,
@@ -628,7 +628,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
 
         let channel_id = msg.channel_id;
         let vardiff_key = (downstream_id, channel_id).into();
-        let messages = self.with_live_downstream(downstream_id, |downstream| {
+        let messages = self.with_registered_downstream(downstream_id, |downstream| {
                 let messages = if !downstream.standard_channels.contains_key(&channel_id) {
                     let error = SubmitSharesError {
                         channel_id,
@@ -885,7 +885,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
 
         let channel_id = msg.channel_id;
         let vardiff_key = (downstream_id, channel_id).into();
-        let messages = self.with_live_downstream(downstream_id, |downstream| {
+        let messages = self.with_registered_downstream(downstream_id, |downstream| {
                 let messages = if !downstream.extended_channels.contains_key(&channel_id) {
                     let error = SubmitSharesError {
                         channel_id,
@@ -1137,7 +1137,7 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
         let new_nominal_hash_rate = msg.nominal_hash_rate;
         let requested_maximum_target =
             Target::from_le_bytes(msg.maximum_target.inner_as_ref().try_into().unwrap());
-        let messages = self.with_live_downstream(downstream_id, |downstream| {
+        let messages = self.with_registered_downstream(downstream_id, |downstream| {
             let mut messages: Vec<RouteMessageTo> = Vec::new();
 
             if downstream
@@ -1303,37 +1303,38 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
         }
 
         // Step 2: JDS validated successfully — commit the job to the extended channel.
-        let message: RouteMessageTo = self.with_live_downstream(downstream_id, |downstream| {
-            match downstream.extended_channels.with_mut(
-                &msg_static.channel_id,
-                |extended_channel| {
-                    let job_id = extended_channel
-                        .on_set_custom_mining_job(msg_static.clone())
-                        .map_err(|error| PoolError::disconnect(error, downstream_id))?;
+        let message: RouteMessageTo =
+            self.with_registered_downstream(downstream_id, |downstream| {
+                match downstream.extended_channels.with_mut(
+                    &msg_static.channel_id,
+                    |extended_channel| {
+                        let job_id = extended_channel
+                            .on_set_custom_mining_job(msg_static.clone())
+                            .map_err(|error| PoolError::disconnect(error, downstream_id))?;
 
-                    let success = SetCustomMiningJobSuccess {
-                        channel_id: msg_static.channel_id,
-                        request_id: msg_static.request_id,
-                        job_id,
-                    };
-                    Ok((downstream_id, Mining::SetCustomMiningJobSuccess(success)).into())
-                },
-            ) {
-                Some(message) => message,
-                None => {
-                    error!("SetCustomMiningJobError: invalid-channel-id");
-                    let error = SetCustomMiningJobError {
-                        request_id: msg_static.request_id,
-                        channel_id: msg_static.channel_id,
-                        error_code: ERROR_CODE_SET_CUSTOM_MINING_JOB_INVALID_CHANNEL_ID
-                            .to_string()
-                            .try_into()
-                            .expect("error code must be valid string"),
-                    };
-                    Ok((downstream_id, Mining::SetCustomMiningJobError(error)).into())
+                        let success = SetCustomMiningJobSuccess {
+                            channel_id: msg_static.channel_id,
+                            request_id: msg_static.request_id,
+                            job_id,
+                        };
+                        Ok((downstream_id, Mining::SetCustomMiningJobSuccess(success)).into())
+                    },
+                ) {
+                    Some(message) => message,
+                    None => {
+                        error!("SetCustomMiningJobError: invalid-channel-id");
+                        let error = SetCustomMiningJobError {
+                            request_id: msg_static.request_id,
+                            channel_id: msg_static.channel_id,
+                            error_code: ERROR_CODE_SET_CUSTOM_MINING_JOB_INVALID_CHANNEL_ID
+                                .to_string()
+                                .try_into()
+                                .expect("error code must be valid string"),
+                        };
+                        Ok((downstream_id, Mining::SetCustomMiningJobError(error)).into())
+                    }
                 }
-            }
-        })?;
+            })?;
 
         message
             .forward(&self.channel_manager_io)

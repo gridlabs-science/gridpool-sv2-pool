@@ -716,7 +716,7 @@ impl ChannelManager {
     /// `DownstreamNotFound` with a disconnect action if the downstream is no
     /// longer registered.
     #[allow(clippy::result_large_err)]
-    fn with_live_downstream<R, F>(
+    fn with_registered_downstream<R, F>(
         &self,
         downstream_id: DownstreamId,
         f: F,

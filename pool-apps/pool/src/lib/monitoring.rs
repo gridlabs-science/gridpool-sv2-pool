@@ -84,9 +84,11 @@ fn downstream_to_sv2_client_info(client: &Downstream) -> Option<Sv2ClientInfo> {
             });
         });
 
-            Sv2ClientInfo::new(client.downstream_id, extended_channels, standard_channels)
-        })
-        .ok()
+    Some(Sv2ClientInfo::new(
+        client.downstream_id,
+        extended_channels,
+        standard_channels,
+    ))
 }
 
 impl Sv2ClientsMonitoring for ChannelManager {
