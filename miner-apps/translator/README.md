@@ -91,7 +91,7 @@ Payout verification is disabled by default. Set `verify_payout = true` for solo 
 donation configurations where `user_identity` intentionally encodes an on-chain payout address:
 
 - `sri/solo/<payout_address>/<worker>`: tProxy verifies every upstream extended job pays 100% of spendable coinbase outputs to `<payout_address>`
-- `<payout_address>[.worker]`: legacy solo mode, verified as 100% miner payout when `verify_payout = true`
+- `<payout_address>[.worker]`: legacy solo mode, verified by checking that at least 90% of spendable coinbase outputs go to `<payout_address>`
 - `sri/donate/<pool_percentage>/<payout_address>/<worker>`: tProxy verifies the miner address receives the remaining percentage
 - `sri/donate/<worker>`: full donation mode; keep `verify_payout = false` because no miner payout address is present
 
