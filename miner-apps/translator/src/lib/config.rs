@@ -149,9 +149,11 @@ impl TranslatorConfig {
         }
 
         match PayoutMode::try_from(user_identity) {
-            Ok(payout_mode @ (PayoutMode::Solo { .. } | PayoutMode::Donate { .. })) => {
-                Ok(Some(payout_mode))
-            }
+            Ok(
+                payout_mode @ (PayoutMode::Solo { .. }
+                | PayoutMode::LegacySolo { .. }
+                | PayoutMode::Donate { .. }),
+            ) => Ok(Some(payout_mode)),
             Ok(PayoutMode::FullDonation) => Err(PayoutModeError::MissingMinerPayout {
                 user_identity: user_identity.to_string(),
                 mode: MissingMinerPayoutMode::FullDonation,
@@ -321,7 +323,7 @@ mod tests {
             enabled_config
                 .expected_payout_distribution(payout_address)
                 .unwrap(),
-            Some(PayoutMode::Solo { .. })
+            Some(PayoutMode::LegacySolo { .. })
         ));
     }
 

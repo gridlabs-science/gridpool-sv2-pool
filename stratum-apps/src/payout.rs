@@ -13,12 +13,15 @@ use crate::{
     stratum_core::bitcoin::{consensus::Decodable, Amount, ScriptBuf, TxOut},
 };
 
+// Legacy solo identities do not encode a fee policy, so allow at most a 10% service fee.
+const MIN_LEGACY_SOLO_PAYOUT_PERCENTAGE: u8 = 90;
+
 /// Represents the payout mode encoded by a mining `user_identity`.
 ///
 /// Supported patterns:
 /// - `sri/solo/<payout_address>/<worker_name>`: full reward goes to the miner.
-/// - `<payout_address>` or `<payout_address>.<worker_name>`: legacy solo mode, full reward goes to
-///   the miner.
+/// - `<payout_address>` or `<payout_address>.<worker_name>`: legacy solo mode; payout verification
+///   checks that the miner address receives at least 90% of spendable coinbase outputs.
 /// - `sri/donate/<percentage>/<payout_address>/<worker_name>`: pool receives `percentage`, miner
 ///   receives the remainder.
 /// - `sri/donate/<worker_name>`: full reward goes to the pool.
@@ -26,6 +29,13 @@ use crate::{
 pub enum PayoutMode {
     /// Solo mode: miner receives full block reward.
     Solo {
+        /// Miner payout address as supplied in `user_identity`.
+        address: String,
+        /// Miner payout script.
+        script: CoinbaseRewardScript,
+    },
+    /// Legacy solo mode: miner payout address must receive at least 90% of spendable coinbase outputs.
+    LegacySolo {
         /// Miner payout address as supplied in `user_identity`.
         address: String,
         /// Miner payout script.
@@ -53,6 +63,10 @@ impl PayoutMode {
     ) -> Vec<TxOut> {
         match self {
             Self::Solo {
+                script: coinbase_script,
+                ..
+            }
+            | Self::LegacySolo {
                 script: coinbase_script,
                 ..
             } => {
@@ -118,6 +132,24 @@ impl PayoutMode {
             .filter(|output| output.script_pubkey.as_bytes() == script_pubkey.as_bytes())
             .map(|output| output.value.to_sat())
             .sum();
+        if matches!(self, Self::LegacySolo { .. }) {
+            let expected_miner_sats = self.expected_legacy_solo_miner_sats(total_spendable_sats);
+            if actual_miner_sats < expected_miner_sats {
+                return Err(PayoutValidationError::PayoutMismatch {
+                    address: self
+                        .miner_address()
+                        .expect("miner script exists only when miner address exists")
+                        .to_string(),
+                    expected_sats: expected_miner_sats,
+                    expected_percentage: MIN_LEGACY_SOLO_PAYOUT_PERCENTAGE,
+                    total_spendable_sats,
+                    actual_sats: actual_miner_sats,
+                });
+            }
+
+            return Ok(());
+        }
+
         let expected_miner_sats = self.expected_miner_sats(total_spendable_sats);
         if actual_miner_sats != expected_miner_sats {
             return Err(PayoutValidationError::PayoutMismatch {
@@ -155,21 +187,25 @@ impl PayoutMode {
 
     fn miner_address(&self) -> Option<&str> {
         match self {
-            Self::Solo { address, .. } | Self::Donate { address, .. } => Some(address.as_str()),
+            Self::Solo { address, .. }
+            | Self::LegacySolo { address, .. }
+            | Self::Donate { address, .. } => Some(address.as_str()),
             Self::FullDonation => None,
         }
     }
 
     fn miner_script_pubkey(&self) -> Option<ScriptBuf> {
         match self {
-            Self::Solo { script, .. } | Self::Donate { script, .. } => Some(script.script_pubkey()),
+            Self::Solo { script, .. }
+            | Self::LegacySolo { script, .. }
+            | Self::Donate { script, .. } => Some(script.script_pubkey()),
             Self::FullDonation => None,
         }
     }
 
     fn expected_miner_percentage(&self) -> u8 {
         match self {
-            Self::Solo { .. } => 100,
+            Self::Solo { .. } | Self::LegacySolo { .. } => 100,
             Self::Donate { percentage, .. } => 100 - percentage,
             Self::FullDonation => 0,
         }
@@ -177,13 +213,17 @@ impl PayoutMode {
 
     fn expected_miner_sats(&self, total_spendable_sats: u64) -> u64 {
         match self {
-            Self::Solo { .. } => total_spendable_sats,
+            Self::Solo { .. } | Self::LegacySolo { .. } => total_spendable_sats,
             Self::Donate { percentage, .. } => {
                 let pool_sats = (total_spendable_sats * *percentage as u64) / 100;
                 total_spendable_sats.saturating_sub(pool_sats)
             }
             Self::FullDonation => 0,
         }
+    }
+
+    fn expected_legacy_solo_miner_sats(&self, total_spendable_sats: u64) -> u64 {
+        (total_spendable_sats * MIN_LEGACY_SOLO_PAYOUT_PERCENTAGE as u64).div_ceil(100)
     }
 }
 
@@ -198,7 +238,7 @@ impl TryFrom<&str> for PayoutMode {
         let addr = address_part_from_user_identity(user_identity);
 
         if let Ok(script) = script_from_address(addr) {
-            return Ok(Self::Solo {
+            return Ok(Self::LegacySolo {
                 address: addr.to_string(),
                 script,
             });
@@ -251,6 +291,10 @@ impl fmt::Display for PayoutMode {
             Self::Solo { address, .. } => {
                 write!(f, "100% miner payout to {address}")
             }
+            Self::LegacySolo { address, .. } => write!(
+                f,
+                "at least {MIN_LEGACY_SOLO_PAYOUT_PERCENTAGE}% miner payout to {address}"
+            ),
             Self::Donate {
                 percentage,
                 address,
@@ -449,7 +493,7 @@ mod tests {
         ));
         assert!(matches!(
             PayoutMode::try_from(MINER_ADDRESS),
-            Ok(PayoutMode::Solo { script, .. }) if Address::from_script(script.script_pubkey().as_script(), MAINNET.clone()).unwrap().to_string() == MINER_ADDRESS
+            Ok(PayoutMode::LegacySolo { script, .. }) if Address::from_script(script.script_pubkey().as_script(), MAINNET.clone()).unwrap().to_string() == MINER_ADDRESS
         ));
     }
 
@@ -457,11 +501,11 @@ mod tests {
     fn parses_legacy_address_identity_with_worker_suffix() {
         assert!(matches!(
             PayoutMode::try_from(format!("{MINER_ADDRESS}.worker1").as_str()),
-            Ok(PayoutMode::Solo { script, .. }) if Address::from_script(script.script_pubkey().as_script(), MAINNET.clone()).unwrap().to_string() == MINER_ADDRESS
+            Ok(PayoutMode::LegacySolo { script, .. }) if Address::from_script(script.script_pubkey().as_script(), MAINNET.clone()).unwrap().to_string() == MINER_ADDRESS
         ));
         assert!(matches!(
             PayoutMode::try_from(format!("{MINER_ADDRESS}.worker1.subworker").as_str()),
-            Ok(PayoutMode::Solo { script, .. }) if Address::from_script(script.script_pubkey().as_script(), MAINNET.clone()).unwrap().to_string() == MINER_ADDRESS
+            Ok(PayoutMode::LegacySolo { script, .. }) if Address::from_script(script.script_pubkey().as_script(), MAINNET.clone()).unwrap().to_string() == MINER_ADDRESS
         ));
     }
 
@@ -566,6 +610,51 @@ mod tests {
             PayoutValidationError::PayoutMismatch {
                 expected_sats: 1000,
                 actual_sats: 900,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn validates_legacy_solo_distribution_with_service_fee_output() {
+        let expected = PayoutMode::try_from(format!("{MINER_ADDRESS}.w1").as_str()).unwrap();
+        let suffix = coinbase_suffix(vec![tx_out(991, MINER_ADDRESS), tx_out(9, OTHER_ADDRESS)]);
+
+        expected.validate_coinbase_tx_suffix(&suffix).unwrap();
+    }
+
+    #[test]
+    fn rejects_legacy_solo_distribution_below_minimum() {
+        let expected = PayoutMode::try_from(format!("{MINER_ADDRESS}.w1").as_str()).unwrap();
+        let suffix = coinbase_suffix(vec![tx_out(899, MINER_ADDRESS), tx_out(101, OTHER_ADDRESS)]);
+
+        let err = expected.validate_coinbase_tx_suffix(&suffix).unwrap_err();
+
+        assert!(matches!(
+            err,
+            PayoutValidationError::PayoutMismatch {
+                expected_sats: 900,
+                expected_percentage: 90,
+                actual_sats: 899,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn rejects_legacy_solo_distribution_without_miner_address() {
+        let expected = PayoutMode::try_from(format!("{MINER_ADDRESS}.w1").as_str()).unwrap();
+        let suffix = coinbase_suffix(vec![tx_out(1_000, OTHER_ADDRESS)]);
+
+        let err = expected.validate_coinbase_tx_suffix(&suffix).unwrap_err();
+
+        assert!(matches!(
+            err,
+            PayoutValidationError::PayoutMismatch {
+                expected_sats: 900,
+                expected_percentage: 90,
+                total_spendable_sats: 1000,
+                actual_sats: 0,
                 ..
             }
         ));

@@ -96,7 +96,8 @@ async fn translate_sv1_to_sv2_successfully() {
     shutdown_all!(translator, pool);
 }
 
-/// Checks that tProxy mines when payout verification passes for address and donation identities.
+/// Checks that tProxy mines when payout verification passes for legacy address and donation
+/// identities.
 #[tokio::test]
 async fn translator_mines_when_payout_matches_address_or_donation_identity() {
     start_tracing();
@@ -111,12 +112,18 @@ async fn translator_mines_when_payout_matches_address_or_donation_identity() {
             .unwrap()
             .script_pubkey();
 
-    let mut solo_coinbase_tx_suffix = hex::decode("feffffff").unwrap();
-    solo_coinbase_tx_suffix.extend(serialize(&vec![TxOut {
-        value: Amount::from_sat(5_000_000_000),
-        script_pubkey: miner_script_pubkey.clone(),
-    }]));
-    solo_coinbase_tx_suffix.extend([0, 0, 0, 0]);
+    let mut legacy_solo_coinbase_tx_suffix = hex::decode("feffffff").unwrap();
+    legacy_solo_coinbase_tx_suffix.extend(serialize(&vec![
+        TxOut {
+            value: Amount::from_sat(4_955_000_000),
+            script_pubkey: miner_script_pubkey.clone(),
+        },
+        TxOut {
+            value: Amount::from_sat(45_000_000),
+            script_pubkey: pool_script_pubkey.clone(),
+        },
+    ]));
+    legacy_solo_coinbase_tx_suffix.extend([0, 0, 0, 0]);
 
     let mut partial_donation_coinbase_tx_suffix = hex::decode("feffffff").unwrap();
     partial_donation_coinbase_tx_suffix.extend(serialize(&vec![
@@ -135,7 +142,7 @@ async fn translator_mines_when_payout_matches_address_or_donation_identity() {
         (
             "payout-address",
             PAYOUT_VERIFICATION_MINER_ADDRESS.to_string(),
-            solo_coinbase_tx_suffix,
+            legacy_solo_coinbase_tx_suffix,
         ),
         (
             "payout-donation",
