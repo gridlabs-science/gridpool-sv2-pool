@@ -1,6 +1,6 @@
 [package]
 name = "integration_tests_sv2"
-version = "0.3.0"
+version = "0.4.0"
 authors = ["The Stratum V2 Developers"]
 edition = "2021"
 description = "Sv2 Integration Tests Framework"
