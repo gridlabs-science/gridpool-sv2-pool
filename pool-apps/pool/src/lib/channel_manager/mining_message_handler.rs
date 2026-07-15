@@ -2,7 +2,17 @@ use std::{convert::TryFrom, sync::atomic::Ordering};
 
 use stratum_apps::stratum_core::{
     binary_sv2::Str0255,
-    bitcoin::Target,
+    bitcoin::{
+        absolute::LockTime,
+        blockdata::{
+            block::{Header, Version},
+            witness::Witness,
+        },
+        consensus,
+        hashes::{sha256d, Hash},
+        transaction::{OutPoint, Transaction, TxIn, Version as TxVersion},
+        BlockHash, CompactTarget, Sequence, Target,
+    },
     channels_sv2::{
         server::{
             error::{ExtendedChannelError, StandardChannelError},
@@ -27,8 +37,116 @@ use jd_server_sv2::job_declarator::SetCustomMiningJobResponse;
 use crate::{
     channel_manager::{ChannelManager, RouteMessageTo, CLIENT_SEARCH_SPACE_BYTES},
     error::{self, PoolError, PoolErrorKind},
+    gridpool::{ChannelPayout, ShareSubmission, TelemetryDelta},
     utils::{create_close_channel_msg, PayoutMode, PayoutModeError},
 };
+
+fn build_standard_gridpool_proof(
+    pool_tag: &str,
+    channel: &StandardChannel<'_>,
+    msg: &SubmitSharesStandard,
+    payout: &ChannelPayout,
+    achieved_difficulty: f64,
+) -> Option<ShareSubmission> {
+    let job = channel
+        .get_active_job()
+        .filter(|job| job.get_job_id() == msg.job_id)
+        .or_else(|| channel.get_past_job(msg.job_id))?;
+    let chain_tip = channel.get_chain_tip()?;
+    let tag = format!("/{pool_tag}//").into_bytes();
+    if tag.len() > 61 {
+        return None;
+    }
+    let mut script_sig = job.get_template().coinbase_prefix.to_owned_bytes();
+    script_sig.push(tag.len() as u8);
+    script_sig.extend(tag);
+    script_sig.push(job.get_extranonce_prefix().len() as u8);
+    script_sig.extend(job.get_extranonce_prefix());
+    let coinbase = Transaction {
+        version: TxVersion::non_standard(job.get_template().coinbase_tx_version as i32),
+        lock_time: LockTime::from_consensus(job.get_template().coinbase_tx_locktime),
+        input: vec![TxIn {
+            previous_output: OutPoint::null(),
+            script_sig: script_sig.into(),
+            sequence: Sequence(job.get_template().coinbase_tx_input_sequence),
+            witness: Witness::from(vec![vec![0; 32]]),
+        }],
+        output: job.get_coinbase_outputs().to_vec(),
+    };
+    let merkle_root = job.get_merkle_root().to_array();
+    let prev_hash = chain_tip.prev_hash().clone().into_array();
+    let header = Header {
+        version: Version::from_consensus(msg.version as i32),
+        prev_blockhash: BlockHash::from_raw_hash(sha256d::Hash::from_slice(&prev_hash).ok()?),
+        merkle_root: (*sha256d::Hash::from_bytes_ref(&merkle_root)).into(),
+        time: msg.ntime,
+        bits: CompactTarget::from_consensus(chain_tip.nbits()),
+        nonce: msg.nonce,
+    };
+    Some(ShareSubmission {
+        miner_address: payout.payout_address.clone(),
+        username: payout.username.clone(),
+        header_hex: hex::encode(consensus::serialize(&header)),
+        coinbase_hex: hex::encode(consensus::serialize(&coinbase)),
+        merkle_path: job
+            .get_template()
+            .merkle_path
+            .iter()
+            .map(|node| hex::encode(node.to_array()))
+            .collect(),
+        payout_snapshot_id: None,
+        prev_block_hash: Some(header.prev_blockhash.to_string()),
+        difficulty: achieved_difficulty,
+    })
+}
+
+fn build_extended_gridpool_proof(
+    channel: &ExtendedChannel<'_>,
+    msg: &SubmitSharesExtended<'_>,
+    payout: &ChannelPayout,
+    achieved_difficulty: f64,
+) -> Option<ShareSubmission> {
+    let job = channel
+        .get_active_job()
+        .filter(|job| job.get_job_id() == msg.job_id)
+        .or_else(|| channel.get_past_job(msg.job_id))?;
+    let chain_tip = channel.get_chain_tip()?;
+    let mut full_extranonce = Vec::new();
+    full_extranonce.extend_from_slice(job.get_extranonce_prefix());
+    full_extranonce.extend_from_slice(msg.extranonce.as_bytes());
+    let mut coinbase = Vec::new();
+    coinbase.extend(job.get_coinbase_tx_prefix_without_bip141());
+    coinbase.extend_from_slice(&full_extranonce);
+    coinbase.extend(job.get_coinbase_tx_suffix_without_bip141());
+    let coinbase_tx: Transaction = consensus::deserialize(&coinbase).ok()?;
+    let mut merkle_root: [u8; 32] = *coinbase_tx.compute_txid().as_ref();
+    let mut merkle_path = Vec::new();
+    for node in job.get_merkle_path().iter() {
+        let bytes = node.to_array();
+        merkle_path.push(hex::encode(bytes));
+        let combined = [&merkle_root[..], &bytes[..]].concat();
+        merkle_root = *sha256d::Hash::hash(&combined).as_ref();
+    }
+    let prev_hash = chain_tip.prev_hash().clone().into_array();
+    let header = Header {
+        version: Version::from_consensus(msg.version as i32),
+        prev_blockhash: BlockHash::from_raw_hash(sha256d::Hash::from_slice(&prev_hash).ok()?),
+        merkle_root: (*sha256d::Hash::from_bytes_ref(&merkle_root)).into(),
+        time: msg.ntime,
+        bits: CompactTarget::from_consensus(chain_tip.nbits()),
+        nonce: msg.nonce,
+    };
+    Some(ShareSubmission {
+        miner_address: payout.payout_address.clone(),
+        username: payout.username.clone(),
+        header_hex: hex::encode(consensus::serialize(&header)),
+        coinbase_hex: hex::encode(coinbase),
+        merkle_path,
+        payout_snapshot_id: None,
+        prev_block_hash: Some(header.prev_blockhash.to_string()),
+        difficulty: achieved_difficulty,
+    })
+}
 
 #[cfg_attr(not(test), hotpath::measure_all)]
 impl HandleMiningMessagesFromClientAsync for ChannelManager {
@@ -87,6 +205,8 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
             Ok(())
         })?;
         self.vardiff.remove(&(downstream_id, msg.channel_id).into());
+        self.gridpool_channels
+            .remove(&(downstream_id, msg.channel_id));
         Ok(())
     }
 
@@ -140,8 +260,25 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                     ));
                 };
 
+                let gridpool_payout = match self.gridpool.as_ref() {
+                    Some(gridpool) => match gridpool.resolve_channel(&user_identity) {
+                        Ok(payout) => Some(payout),
+                        Err(reason) => {
+                            error!(%reason, user_identity, "Rejecting invalid GridPool payout identity");
+                            let response = OpenMiningChannelError {
+                                request_id,
+                                error_code: ERROR_CODE_OPEN_MINING_CHANNEL_INVALID_USER_IDENTITY
+                                    .to_string().try_into().expect("valid error code"),
+                            };
+                            return Ok(vec![(downstream_id, Mining::OpenMiningChannelError(response)).into()]);
+                        }
+                    },
+                    None => None,
+                };
+
                 let payout_mode = match PayoutMode::try_from(user_identity.as_str()) {
                     Ok(mode) => mode,
+                    Err(PayoutModeError::NoPayoutMode(_)) if gridpool_payout.is_some() => PayoutMode::FullDonation,
                     Err(PayoutModeError::NoPayoutMode(_)) => PayoutMode::FullDonation,
                     Err(_) => {
                         error!(
@@ -163,10 +300,15 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                     }
                 };
 
-                let coinbase_outputs = payout_mode.coinbase_outputs(
-                    last_future_template.coinbase_tx_value_remaining,
-                    &self.coinbase_reward_script,
-                );
+                let coinbase_outputs = match (&self.gridpool, &gridpool_payout) {
+                    (Some(gridpool), Some(payout)) => gridpool
+                        .coinbase_outputs(payout, last_future_template.coinbase_tx_value_remaining)
+                        .map_err(|e| PoolError::disconnect(PoolErrorKind::Configuration(e), downstream_id))?,
+                    _ => payout_mode.coinbase_outputs(
+                        last_future_template.coinbase_tx_value_remaining,
+                        &self.coinbase_reward_script,
+                    ),
+                };
 
                 downstream
                     .payout_mode
@@ -182,7 +324,6 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                     .map_err(PoolError::shutdown)?;
 
                 let channel_id = downstream.channel_id_factory.fetch_add(1, Ordering::SeqCst);
-
                 let mut standard_channel = match StandardChannel::new_for_pool(
                     channel_id,
                     user_identity.to_string(),
@@ -219,6 +360,9 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                         }
                     },
                 };
+                if let Some(payout) = gridpool_payout {
+                    self.gridpool_channels.insert((downstream_id, channel_id), payout);
+                }
 
                 let group_channel_id = downstream
                     .group_channel
@@ -386,6 +530,22 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                     }
                 };
 
+                let gridpool_payout = match self.gridpool.as_ref() {
+                    Some(gridpool) => match gridpool.resolve_channel(&user_identity) {
+                        Ok(payout) => Some(payout),
+                        Err(reason) => {
+                            error!(%reason, user_identity, "Rejecting invalid GridPool payout identity");
+                            let response = OpenMiningChannelError {
+                                request_id,
+                                error_code: ERROR_CODE_OPEN_MINING_CHANNEL_INVALID_USER_IDENTITY
+                                    .to_string().try_into().expect("valid error code"),
+                            };
+                            return Ok(vec![(downstream_id, Mining::OpenMiningChannelError(response)).into()]);
+                        }
+                    },
+                    None => None,
+                };
+
                 let payout_mode = match PayoutMode::try_from(user_identity.as_str()) {
                     Ok(mode) => mode,
                     Err(PayoutModeError::NoPayoutMode(_)) => PayoutMode::FullDonation,
@@ -415,7 +575,6 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                     .map_err(PoolError::shutdown)?;
 
                 let channel_id = downstream.channel_id_factory.fetch_add(1, Ordering::SeqCst);
-
                 let mut extended_channel = match ExtendedChannel::new_for_pool(
                     channel_id,
                     user_identity.to_string(),
@@ -466,6 +625,9 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                         }
                     },
                 };
+                if let Some(payout) = gridpool_payout.clone() {
+                    self.gridpool_channels.insert((downstream_id, channel_id), payout);
+                }
 
                 let group_channel_id = downstream
                     .group_channel
@@ -528,10 +690,15 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                     // future extended job
                     // and the SetNewPrevHash message
                 } else {
-                    let coinbase_outputs = payout_mode.coinbase_outputs(
-                        last_future_template.coinbase_tx_value_remaining,
-                        &self.coinbase_reward_script,
-                    );
+                    let coinbase_outputs = match (&self.gridpool, &gridpool_payout) {
+                        (Some(gridpool), Some(payout)) => gridpool
+                            .coinbase_outputs(payout, last_future_template.coinbase_tx_value_remaining)
+                            .map_err(|e| PoolError::disconnect(PoolErrorKind::Configuration(e), downstream_id))?,
+                        _ => payout_mode.coinbase_outputs(
+                            last_future_template.coinbase_tx_value_remaining,
+                            &self.coinbase_reward_script,
+                        ),
+                    };
 
                     extended_channel
                         .on_new_template(last_future_template.clone(), coinbase_outputs)
@@ -654,8 +821,49 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                             .with_mut(&channel_id, |standard_channel| {
                                 let mut messages: Vec<RouteMessageTo> = Vec::new();
                                 let res = standard_channel.validate_share(msg.clone());
+                                if res.is_err() {
+                                    if let (Some(gridpool), Some(payout)) = (
+                                        self.gridpool.as_ref(),
+                                        self.gridpool_channels.get_cloned(&(downstream_id, channel_id)),
+                                    ) {
+                                        gridpool.record_telemetry(TelemetryDelta {
+                                            channel_id,
+                                            payout_address: payout.payout_address,
+                                            username: payout.username,
+                                            accepted: false,
+                                            ..Default::default()
+                                        });
+                                    }
+                                }
                                 match res {
                                     Ok(ShareValidationResult::Valid(share_hash)) => {
+                                        if let (Some(gridpool), Some(payout)) = (
+                                            self.gridpool.as_ref(),
+                                            self.gridpool_channels.get_cloned(&(downstream_id, channel_id)),
+                                        ) {
+                                            let achieved_difficulty = Target::from_le_bytes(*share_hash.as_ref()).difficulty_float();
+                                            let work_difficulty = standard_channel.get_target().difficulty_float();
+                                            let fee_work = standard_channel.get_active_job()
+                                                .map(|job| gridpool.is_fee_job(job.get_coinbase_outputs(), &payout))
+                                                .unwrap_or(false);
+                                            gridpool.record_telemetry(TelemetryDelta {
+                                                channel_id,
+                                                payout_address: payout.payout_address.clone(),
+                                                username: payout.username.clone(),
+                                                accepted: true,
+                                                work_difficulty,
+                                                achieved_difficulty,
+                                                fee_work,
+                                            });
+                                            let channel_key = ((downstream_id as u64) << 32) | channel_id as u64;
+                                            if gridpool.should_submit_proof(channel_key, achieved_difficulty, false) {
+                                                if let Some(proof) = build_standard_gridpool_proof(
+                                                    &self.pool_tag_string, standard_channel, &msg, &payout, achieved_difficulty,
+                                                ) {
+                                                    gridpool.submit_proof(proof);
+                                                }
+                                            }
+                                        }
                                         let share_accounting = standard_channel.get_share_accounting();
                                         if share_accounting.should_acknowledge() {
                                             let success = SubmitSharesSuccess {
@@ -686,6 +894,30 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                                         template_id,
                                         coinbase,
                                     )) => {
+                                        if let (Some(gridpool), Some(payout)) = (
+                                            self.gridpool.as_ref(),
+                                            self.gridpool_channels.get_cloned(&(downstream_id, channel_id)),
+                                        ) {
+                                            let achieved_difficulty = Target::from_le_bytes(*share_hash.as_ref()).difficulty_float();
+                                            let work_difficulty = standard_channel.get_target().difficulty_float();
+                                            let fee_work = standard_channel.get_active_job()
+                                                .map(|job| gridpool.is_fee_job(job.get_coinbase_outputs(), &payout))
+                                                .unwrap_or(false);
+                                            gridpool.record_telemetry(TelemetryDelta {
+                                                channel_id,
+                                                payout_address: payout.payout_address.clone(),
+                                                username: payout.username.clone(),
+                                                accepted: true,
+                                                work_difficulty,
+                                                achieved_difficulty,
+                                                fee_work,
+                                            });
+                                            if let Some(proof) = build_standard_gridpool_proof(
+                                                &self.pool_tag_string, standard_channel, &msg, &payout, achieved_difficulty,
+                                            ) {
+                                                gridpool.submit_proof(proof);
+                                            }
+                                        }
                                         info!("SubmitSharesStandard: 💰 Block Found!!! 💰{share_hash}");
                                         // if we have a template id (i.e.: this was not a custom job)
                                         // we can propagate the solution to the TP
@@ -915,8 +1147,47 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                             .with_mut(&channel_id, |extended_channel| {
                                 let mut messages: Vec<RouteMessageTo> = Vec::new();
                                 let res = extended_channel.validate_share(msg.clone());
+                                if res.is_err() {
+                                    if let (Some(gridpool), Some(payout)) = (
+                                        self.gridpool.as_ref(),
+                                        self.gridpool_channels.get_cloned(&(downstream_id, channel_id)),
+                                    ) {
+                                        gridpool.record_telemetry(TelemetryDelta {
+                                            channel_id,
+                                            payout_address: payout.payout_address,
+                                            username: payout.username,
+                                            accepted: false,
+                                            ..Default::default()
+                                        });
+                                    }
+                                }
                                 match res {
                                     Ok(ShareValidationResult::Valid(share_hash)) => {
+                                        if let (Some(gridpool), Some(payout)) = (
+                                            self.gridpool.as_ref(),
+                                            self.gridpool_channels.get_cloned(&(downstream_id, channel_id)),
+                                        ) {
+                                            let achieved_difficulty = Target::from_le_bytes(*share_hash.as_ref()).difficulty_float();
+                                            let work_difficulty = extended_channel.get_target().difficulty_float();
+                                            let fee_work = extended_channel.get_active_job()
+                                                .map(|job| gridpool.is_fee_job(job.get_coinbase_outputs(), &payout))
+                                                .unwrap_or(false);
+                                            gridpool.record_telemetry(TelemetryDelta {
+                                                channel_id,
+                                                payout_address: payout.payout_address.clone(),
+                                                username: payout.username.clone(),
+                                                accepted: true,
+                                                work_difficulty,
+                                                achieved_difficulty,
+                                                fee_work,
+                                            });
+                                            let channel_key = ((downstream_id as u64) << 32) | channel_id as u64;
+                                            if gridpool.should_submit_proof(channel_key, achieved_difficulty, false) {
+                                                if let Some(proof) = build_extended_gridpool_proof(
+                                                    extended_channel, &msg, &payout, achieved_difficulty,
+                                                ) { gridpool.submit_proof(proof); }
+                                            }
+                                        }
                                         let share_accounting = extended_channel.get_share_accounting();
                                         if share_accounting.should_acknowledge() {
                                             let success = SubmitSharesSuccess {
@@ -947,6 +1218,28 @@ impl HandleMiningMessagesFromClientAsync for ChannelManager {
                                         template_id,
                                         coinbase,
                                     )) => {
+                                        if let (Some(gridpool), Some(payout)) = (
+                                            self.gridpool.as_ref(),
+                                            self.gridpool_channels.get_cloned(&(downstream_id, channel_id)),
+                                        ) {
+                                            let achieved_difficulty = Target::from_le_bytes(*share_hash.as_ref()).difficulty_float();
+                                            let work_difficulty = extended_channel.get_target().difficulty_float();
+                                            let fee_work = extended_channel.get_active_job()
+                                                .map(|job| gridpool.is_fee_job(job.get_coinbase_outputs(), &payout))
+                                                .unwrap_or(false);
+                                            gridpool.record_telemetry(TelemetryDelta {
+                                                channel_id,
+                                                payout_address: payout.payout_address.clone(),
+                                                username: payout.username.clone(),
+                                                accepted: true,
+                                                work_difficulty,
+                                                achieved_difficulty,
+                                                fee_work,
+                                            });
+                                            if let Some(proof) = build_extended_gridpool_proof(
+                                                extended_channel, &msg, &payout, achieved_difficulty,
+                                            ) { gridpool.submit_proof(proof); }
+                                        }
                                         info!("SubmitSharesExtended: 💰 Block Found!!! 💰{share_hash}");
                                         if let Some(template_id) = template_id {
                                             info!("SubmitSharesExtended: Propagating solution to the Template Provider.");

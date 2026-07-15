@@ -14,6 +14,7 @@ pub mod channel_manager;
 pub mod config;
 pub mod downstream;
 pub mod error;
+pub mod gridpool;
 mod io_task;
 #[cfg(feature = "monitoring")]
 mod monitoring;

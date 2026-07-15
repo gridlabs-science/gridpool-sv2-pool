@@ -42,6 +42,7 @@ use crate::{
     config::PoolConfig,
     downstream::Downstream,
     error::{self, Action, LoopControl, PoolError, PoolErrorKind, PoolResult},
+    gridpool::{ChannelPayout, GridPoolClient},
     utils::DownstreamMessage,
 };
 
@@ -114,6 +115,8 @@ pub struct ChannelManager {
     required_extensions: Vec<u16>,
     /// Embedded Job Declaration engine (present when `[jds]` config is set).
     job_declarator: Option<JobDeclarator>,
+    pub(crate) gridpool: Option<GridPoolClient>,
+    pub(crate) gridpool_channels: SharedMap<(DownstreamId, ChannelId), ChannelPayout>,
 }
 
 #[cfg_attr(not(test), hotpath::measure_all)]
@@ -179,6 +182,17 @@ impl ChannelManager {
             downstream_receiver,
         };
 
+        let gridpool = match config.gridpool().cloned() {
+            Some(gridpool_config) => {
+                let client = GridPoolClient::connect(gridpool_config)
+                    .await
+                    .map_err(|e| PoolError::shutdown(PoolErrorKind::Configuration(e)))?;
+                client.start();
+                Some(client)
+            }
+            None => None,
+        };
+
         let channel_manager = ChannelManager {
             downstreams: SharedMap::new(),
             extranonce_allocator: SharedLock::new(extranonce_allocator),
@@ -195,6 +209,8 @@ impl ChannelManager {
             supported_extensions: config.supported_extensions().to_vec(),
             required_extensions: config.required_extensions().to_vec(),
             job_declarator,
+            gridpool,
+            gridpool_channels: SharedMap::new(),
         };
 
         Ok(channel_manager)
@@ -418,12 +434,20 @@ impl ChannelManager {
         task_manager: Arc<TaskManager>,
         coinbase_outputs: Vec<TxOut>,
     ) -> PoolResult<(), error::ChannelManager> {
-        self.coinbase_output_constraints(coinbase_outputs).await?;
+        let constraint_outputs = match self.gridpool.as_ref() {
+            Some(gridpool) => gridpool
+                .constraint_outputs()
+                .map_err(|e| PoolError::shutdown(PoolErrorKind::Configuration(e)))?,
+            None => coinbase_outputs,
+        };
+        self.coinbase_output_constraints(constraint_outputs).await?;
 
         task_manager.spawn(async move {
             let cm = self.clone();
             let vardiff_future = self.run_vardiff_loop();
             tokio::pin!(vardiff_future);
+            let mut gridpool_fee_interval =
+                tokio::time::interval(std::time::Duration::from_secs(1));
             loop {
                 let mut cm_template = cm.clone();
                 let mut cm_downstreams = cm.clone();
@@ -460,10 +484,129 @@ impl ChannelManager {
                             }
                         }
                     }
+                    _ = gridpool_fee_interval.tick(), if cm.gridpool.is_some() => {
+                        if let Err(e) = cm.clone().refresh_gridpool_fee_jobs().await {
+                            warn!(error = ?e.kind, "Unable to refresh GridPool fee jobs");
+                        }
+                    }
                 }
             }
             self.channel_manager_io.close();
         });
+        Ok(())
+    }
+
+    async fn refresh_gridpool_fee_jobs(&mut self) -> PoolResult<(), error::ChannelManager> {
+        let Some(gridpool) = self.gridpool.clone() else {
+            return Ok(());
+        };
+        let Some(mut template) = self
+            .last_future_template
+            .get()
+            .map_err(PoolError::shutdown)?
+        else {
+            return Ok(());
+        };
+        template.future_template = false;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let mut messages: Vec<RouteMessageTo> = Vec::new();
+
+        self.downstreams.try_for_each(|downstream_id, downstream| {
+            downstream
+                .standard_channels
+                .try_for_each_mut(|channel_id, channel| {
+                    let Some(payout) = self
+                        .gridpool_channels
+                        .get_cloned(&(downstream_id, channel_id))
+                    else {
+                        return Ok(());
+                    };
+                    let desired_fee = gridpool.fee_active(&payout.payout_address, now);
+                    let outputs = gridpool
+                        .coinbase_outputs(&payout, template.coinbase_tx_value_remaining)
+                        .map_err(|e| PoolError::shutdown(PoolErrorKind::Configuration(e)))?;
+                    if channel
+                        .get_active_job()
+                        .is_some_and(|job| job.get_coinbase_outputs().starts_with(&outputs))
+                    {
+                        return Ok(());
+                    }
+                    channel
+                        .on_new_template(template.clone(), outputs)
+                        .map_err(PoolError::shutdown)?;
+                    let job = channel
+                        .get_active_job()
+                        .ok_or_else(|| PoolError::shutdown(PoolErrorKind::JobNotFound))?;
+                    messages.push(
+                        (
+                            downstream_id,
+                            Mining::NewMiningJob(job.get_job_message().clone()),
+                        )
+                            .into(),
+                    );
+                    info!(
+                        downstream_id,
+                        channel_id,
+                        fee_active = desired_fee,
+                        "Rotating GridPool fee work slice"
+                    );
+                    Ok::<(), PoolError<error::ChannelManager>>(())
+                })?;
+            downstream
+                .extended_channels
+                .try_for_each_mut(|channel_id, channel| {
+                    let Some(payout) = self
+                        .gridpool_channels
+                        .get_cloned(&(downstream_id, channel_id))
+                    else {
+                        return Ok(());
+                    };
+                    let desired_fee = gridpool.fee_active(&payout.payout_address, now);
+                    let outputs = gridpool
+                        .coinbase_outputs(&payout, template.coinbase_tx_value_remaining)
+                        .map_err(|e| PoolError::shutdown(PoolErrorKind::Configuration(e)))?;
+                    if channel
+                        .get_active_job()
+                        .is_some_and(|job| job.get_coinbase_outputs().starts_with(&outputs))
+                    {
+                        return Ok(());
+                    }
+                    channel
+                        .on_new_template(template.clone(), outputs)
+                        .map_err(PoolError::shutdown)?;
+                    let job = channel
+                        .get_active_job()
+                        .ok_or_else(|| PoolError::shutdown(PoolErrorKind::JobNotFound))?;
+                    messages.push(
+                        (
+                            downstream_id,
+                            Mining::NewExtendedMiningJob(job.get_job_message().clone()),
+                        )
+                            .into(),
+                    );
+                    info!(
+                        downstream_id,
+                        channel_id,
+                        fee_active = desired_fee,
+                        "Rotating GridPool extended fee work slice"
+                    );
+                    Ok::<(), PoolError<error::ChannelManager>>(())
+                })?;
+            Ok::<(), PoolError<error::ChannelManager>>(())
+        })?;
+
+        for message in messages {
+            message
+                .forward(&self.channel_manager_io)
+                .await
+                .map_err(|e| {
+                    error!(error = ?e, "Failed to forward GridPool fee job");
+                    PoolError::shutdown(PoolErrorKind::ChannelErrorSender)
+                })?;
+        }
         Ok(())
     }
 
@@ -476,6 +619,8 @@ impl ChannelManager {
         self.downstreams.remove(&downstream_id);
         self.vardiff
             .retain(|key, _| key.downstream_id != downstream_id);
+        self.gridpool_channels
+            .retain(|key, _| key.0 != downstream_id);
         self.channel_manager_io
             .downstream_sender
             .remove(&downstream_id);

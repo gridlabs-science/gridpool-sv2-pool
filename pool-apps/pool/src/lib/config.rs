@@ -50,6 +50,40 @@ pub struct PoolConfig {
     jds: Option<JDSPartialConfig>,
     #[serde(default)]
     monitoring_cache_refresh_secs: Option<u64>,
+    #[serde(default)]
+    gridpool: Option<GridPoolConfig>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+pub struct GridPoolConfig {
+    pub node_url: String,
+    pub fallback_payout_address: String,
+    #[serde(default)]
+    pub operator_fee_address: Option<String>,
+    #[serde(default = "default_operator_fee_percent")]
+    pub operator_fee_percent: f64,
+    pub adapter_token_file: PathBuf,
+    #[serde(default)]
+    pub proof_spool_dir: Option<PathBuf>,
+    #[serde(default = "default_gridpool_refresh_seconds")]
+    pub refresh_seconds: u64,
+    #[serde(default = "default_gridpool_telemetry_seconds")]
+    pub telemetry_flush_seconds: u64,
+    #[serde(default = "default_gridpool_fee_cycle_seconds")]
+    pub fee_cycle_seconds: u64,
+}
+
+fn default_operator_fee_percent() -> f64 {
+    2.0
+}
+fn default_gridpool_refresh_seconds() -> u64 {
+    10
+}
+fn default_gridpool_telemetry_seconds() -> u64 {
+    5
+}
+fn default_gridpool_fee_cycle_seconds() -> u64 {
+    1_500
 }
 
 impl PoolConfig {
@@ -90,6 +124,7 @@ impl PoolConfig {
             monitoring_address,
             monitoring_cache_refresh_secs,
             jds,
+            gridpool: None,
         }
     }
 
@@ -184,6 +219,10 @@ impl PoolConfig {
     /// Returns the monitoring cache refresh interval in seconds.
     pub fn monitoring_cache_refresh_secs(&self) -> Option<u64> {
         self.monitoring_cache_refresh_secs
+    }
+
+    pub fn gridpool(&self) -> Option<&GridPoolConfig> {
+        self.gridpool.as_ref()
     }
 
     /// Builds a complete [`JDSConfig`] from the partial `[jds]` TOML section

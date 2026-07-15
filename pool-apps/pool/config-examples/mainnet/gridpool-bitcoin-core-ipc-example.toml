@@ -1,0 +1,33 @@
+# GridPool SV2 Pool. Replace all keys and payout addresses before use.
+authority_public_key = "9auqWEzQDVyd2oe1JVGFLMLHZtCo2FFqZwtKA5gd9xbuEu7PH72"
+authority_secret_key = "mkDLTBBRxdBv998612qipDYoTK3YUrqLe8uWw7gu3iXbSrn2n"
+cert_validity_sec = 3600
+listen_address = "0.0.0.0:34265"
+coinbase_reward_script = "addr(bc1qrttsncr6tmqmuhkxehe0vyrtrr6nxh2tyjmc6d)"
+server_id = 1
+pool_signature = "GridPool SV2"
+shares_per_minute = 6.0
+share_batch_size = 10
+monitoring_address = "127.0.0.1:9090"
+monitoring_cache_refresh_secs = 15
+
+[gridpool]
+node_url = "http://127.0.0.1:5000"
+# Used only when a channel identity does not contain an address.
+fallback_payout_address = "bc1qrttsncr6tmqmuhkxehe0vyrtrr6nxh2tyjmc6d"
+# Optional gateway fee. Set operator_fee_percent = 0 to disable it.
+operator_fee_address = "bc1qrttsncr6tmqmuhkxehe0vyrtrr6nxh2tyjmc6d"
+operator_fee_percent = 2.0
+# Must point at the same file configured as local_adapter_token_file in boot-portal.
+adapter_token_file = "/var/lib/gridpool/data/local-adapter.token"
+proof_spool_dir = "/var/lib/gridpool/sv2-proof-spool"
+refresh_seconds = 10
+telemetry_flush_seconds = 5
+# At 2%, a 1500-second cycle creates a staggered 30-second operator work slice.
+fee_cycle_seconds = 1500
+
+[template_provider_type.BitcoinCoreIpc]
+version = 31
+network = "mainnet"
+fee_threshold = 100
+min_interval = 5

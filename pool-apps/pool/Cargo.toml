@@ -27,6 +27,9 @@ clap = { version = "4.5.39", features = ["derive"] }
 jd_server_sv2 = { version = "0.4.0", path = "../jd-server" }
 hex = "0.4.3"
 hotpath = "0.14.0"
+reqwest = { version = "0.13.4", features = ["json"] }
+serde_json = "1.0"
+sha2 = "0.10"
 
 [features]
 default = ["monitoring"]

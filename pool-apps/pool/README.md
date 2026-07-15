@@ -115,3 +115,27 @@ the pool's portion and must be between 1 and 99.
 | Error Code | Cause |
 |------------|-------|
 | `invalid-user-identity` | Pattern doesn't match expected format |
+
+## GridPool Mode
+
+The optional `[gridpool]` section turns this SRI Pool role into a sovereign GridPool SV2 gateway.
+It talks directly to Bitcoin Core for templates and to a colocated GridPool node for the active
+payout suffix, telemetry, and full share-proof validation. It does not require JDC or JDS.
+
+Each Standard or Extended channel may use `payout_address[.worker]` as its `user_identity`. A
+valid address becomes slot 0 for that channel. A non-address worker identity uses
+`fallback_payout_address`; an address-looking typo or wrong-network address fails closed with
+`invalid-user-identity`.
+
+Ordinary vardiff shares remain local accounting events and are sent to GridPool in authenticated
+batches. The pool reconstructs and submits full proofs only for reserve-qualified shares, Bitcoin
+blocks, and cadence-limited pulse proofs. Bitcoin Core block submission remains on SRI's original
+path and does not depend on the GridPool HTTP request succeeding.
+
+An optional operator fee uses deterministic timed work slices rather than modifying GridPool
+consensus. With the example 2%/1500-second settings, each payout identity receives a stable,
+staggered 30-second operator slot-0 window every 25 minutes. Reconnecting does not reset the
+schedule. Set `operator_fee_percent = 0` to disable it.
+
+See `config-examples/mainnet/gridpool-bitcoin-core-ipc-example.toml`. The adapter token is generated
+by boot-portal and must only be shared with local trusted adapters.

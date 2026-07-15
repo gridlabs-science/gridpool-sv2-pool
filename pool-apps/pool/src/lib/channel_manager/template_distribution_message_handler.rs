@@ -94,7 +94,7 @@ impl HandleTemplateDistributionMessagesFromServerAsync for ChannelManager {
                     // If REQUIRES_STANDARD_JOBS is not set and the group channel is not
                     // empty we need to send the NewExtendedMiningJob message to the group
                     // channel.
-                    if !requires_standard_jobs && !group_channel.is_empty() {
+                    if !requires_standard_jobs && !group_channel.is_empty() && self.gridpool.is_none() {
                         downstream_messages.push(
                             (
                                 downstream_id,
@@ -113,7 +113,7 @@ impl HandleTemplateDistributionMessagesFromServerAsync for ChannelManager {
             // If REQUIRES_STANDARD_JOBS is set, we need to call on_new_template and send
             // individual NewMiningJob messages for each standard channel.
             downstream.standard_channels.try_for_each_mut(|channel_id, standard_channel| {
-                if !requires_standard_jobs {
+                if !requires_standard_jobs && self.gridpool.is_none() {
                     standard_channel
                         .on_group_channel_job(group_channel_job.clone())
                         .map_err(|e| {
@@ -121,10 +121,20 @@ impl HandleTemplateDistributionMessagesFromServerAsync for ChannelManager {
                             PoolError::shutdown(e)
                         })?;
                 } else {
+                    let channel_coinbase_outputs = match self.gridpool.as_ref() {
+                        Some(gridpool) => {
+                            let payout = self.gridpool_channels
+                                .get_cloned(&(downstream_id, channel_id))
+                                .ok_or_else(|| PoolError::shutdown(PoolErrorKind::JobNotFound))?;
+                            gridpool.coinbase_outputs(&payout, msg.coinbase_tx_value_remaining)
+                                .map_err(|e| PoolError::shutdown(PoolErrorKind::Configuration(e)))?
+                        }
+                        None => downstream_coinbase_outputs.clone(),
+                    };
                     standard_channel
                         .on_new_template(
                             msg.clone().into_static(),
-                            downstream_coinbase_outputs.clone(),
+                            channel_coinbase_outputs,
                         )
                         .map_err(|e| {
                             tracing::error!("Error while adding template to standard channel");
@@ -155,12 +165,32 @@ impl HandleTemplateDistributionMessagesFromServerAsync for ChannelManager {
 
             // Loop over every extended channel and call on_group_channel_job on each one.
             downstream.extended_channels.try_for_each_mut(|channel_id, channel| {
-                channel
-                    .on_group_channel_job(group_channel_job.clone())
-                    .map_err(|e| {
-                        tracing::error!("Error while adding group channel job to extended channel with id: {channel_id:?}");
-                        PoolError::shutdown(e)
-                    })
+                if let Some(gridpool) = self.gridpool.as_ref() {
+                    let payout = self.gridpool_channels
+                        .get_cloned(&(downstream_id, channel_id))
+                        .ok_or_else(|| PoolError::shutdown(PoolErrorKind::JobNotFound))?;
+                    let outputs = gridpool.coinbase_outputs(&payout, msg.coinbase_tx_value_remaining)
+                        .map_err(|e| PoolError::shutdown(PoolErrorKind::Configuration(e)))?;
+                    channel.on_new_template(msg.clone().into_static(), outputs).map_err(PoolError::shutdown)?;
+                    let job = if msg.future_template {
+                        let job_id = channel.get_future_job_id_from_template_id(msg.template_id)
+                            .ok_or_else(|| PoolError::shutdown(PoolErrorKind::JobNotFound))?;
+                        channel.get_future_job(job_id)
+                            .ok_or_else(|| PoolError::shutdown(PoolErrorKind::JobNotFound))?
+                    } else {
+                        channel.get_active_job()
+                            .ok_or_else(|| PoolError::shutdown(PoolErrorKind::JobNotFound))?
+                    };
+                    downstream_messages.push((downstream_id, Mining::NewExtendedMiningJob(job.get_job_message().clone())).into());
+                    Ok(())
+                } else {
+                    channel
+                        .on_group_channel_job(group_channel_job.clone())
+                        .map_err(|e| {
+                            tracing::error!("Error while adding group channel job to extended channel with id: {channel_id:?}");
+                            PoolError::shutdown(e)
+                        })
+                }
             })?;
 
             messages.extend(downstream_messages);
