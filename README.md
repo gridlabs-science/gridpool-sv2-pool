@@ -15,6 +15,13 @@ SV2 Applications
   </a>
 </p>
 
+> **GridPool fork:** this repository carries the active SRI-derived GridPool SV2
+> pool integration. The upstream SRI application remains
+> [`stratum-mining/sv2-apps`](https://github.com/stratum-mining/sv2-apps).
+> GridPool architecture, protocol boundaries, and agent guidance are documented
+> in the [GridPool handbook](https://github.com/gridlabs-science/gridpool-handbook)
+> and this repository's [`AGENTS.md`](AGENTS.md).
+
 # SV2 Apps Repository
 
 This repository contains the application-level crates, currently in **alpha** stage.
