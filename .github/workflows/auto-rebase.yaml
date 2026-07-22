@@ -1,9 +1,9 @@
 name: Auto Rebase
 
 on:
-  push:
-    branches:
-      - main
+  # This inherited maintainer workflow requires a privileged PAT and rewrites
+  # contributor branches. GridPool runs it only when an operator explicitly
+  # supplies that credential; normal pushes are covered by the test workflows.
   workflow_dispatch:
 
 jobs:

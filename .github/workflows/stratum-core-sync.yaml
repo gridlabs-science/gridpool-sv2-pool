@@ -9,10 +9,8 @@ on:
   # Manual fallback.
   workflow_dispatch:
 
-  # Optional safety net in case dispatch integration fails.
-  push:
-    branches:
-      - main
+  # The upstream project also runs this on every main push. This fork relies on
+  # explicit dispatch so ordinary GridPool changes do not require its PAT.
 
 permissions:
   contents: write

@@ -1,10 +1,8 @@
 name: Build and Push Docker Images
 
 on:
-  push:
-    branches:
-      - main
-
+  # Images from this fork must be published deliberately with GridPool-owned
+  # registry credentials, never the inherited StratumV2 Docker Hub account.
   release:
     types: [published]
   workflow_dispatch:
@@ -48,4 +46,3 @@ jobs:
 
           tags: |
             stratumv2/${{ matrix.app }}:${{ github.ref_name }}
-
