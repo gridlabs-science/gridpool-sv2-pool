@@ -43,7 +43,7 @@ serde_json = { version = "1.0", default-features = false, features = ["alloc", "
 # Monitoring optional dependencies
 asic-rs = { version = "0.6.2", optional = true }
 axum = { version = "0.8.7", optional = true }
-prometheus = { version = "0.13", optional = true }
+prometheus = { version = "0.14", optional = true }
 utoipa = { version = "5.4.0", features = ["axum_extras"], optional = true }
 utoipa-swagger-ui = { version = "9.0.2", features = ["axum", "vendored"], optional = true }
 

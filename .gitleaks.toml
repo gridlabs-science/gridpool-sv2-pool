@@ -1,0 +1,9 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Public SRI key-conversion fixtures used only by tests"
+paths = [
+  '''integration-tests/lib/utils\.rs''',
+  '''stratum-apps/src/key_utils/mod\.rs''',
+]

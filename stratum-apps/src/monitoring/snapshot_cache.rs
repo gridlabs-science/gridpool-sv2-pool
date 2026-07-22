@@ -283,7 +283,8 @@ impl SnapshotCache {
                     // Pre-seed spec-defined rejection codes so the metric is always emitted
                     // (avoids GaugeVec lazy-loading hiding the series until first rejection).
                     for &reason in SHARE_REJECTION_CODES {
-                        m.with_label_values(&[&channel_id, user, reason]).set(0.0);
+                        m.with_label_values(&[channel_id.as_str(), user.as_str(), reason])
+                            .set(0.0);
                         current_server_rejected_labels.insert([
                             channel_id.clone(),
                             user.clone(),
@@ -323,7 +324,8 @@ impl SnapshotCache {
                     // Pre-seed spec-defined rejection codes so the metric is always emitted
                     // (avoids GaugeVec lazy-loading hiding the series until first rejection).
                     for &reason in SHARE_REJECTION_CODES {
-                        m.with_label_values(&[&channel_id, user, reason]).set(0.0);
+                        m.with_label_values(&[channel_id.as_str(), user.as_str(), reason])
+                            .set(0.0);
                         current_server_rejected_labels.insert([
                             channel_id.clone(),
                             user.clone(),
@@ -399,8 +401,13 @@ impl SnapshotCache {
                         // Pre-seed spec-defined rejection codes so the metric is always emitted
                         // (avoids GaugeVec lazy-loading hiding the series until first rejection).
                         for &reason in SHARE_REJECTION_CODES {
-                            m.with_label_values(&[&client_id, &channel_id, user, reason])
-                                .set(0.0);
+                            m.with_label_values(&[
+                                client_id.as_str(),
+                                channel_id.as_str(),
+                                user.as_str(),
+                                reason,
+                            ])
+                            .set(0.0);
                             current_client_rejected_labels.insert([
                                 client_id.clone(),
                                 channel_id.clone(),
@@ -440,8 +447,13 @@ impl SnapshotCache {
                         // Pre-seed spec-defined rejection codes so the metric is always emitted
                         // (avoids GaugeVec lazy-loading hiding the series until first rejection).
                         for &reason in SHARE_REJECTION_CODES {
-                            m.with_label_values(&[&client_id, &channel_id, user, reason])
-                                .set(0.0);
+                            m.with_label_values(&[
+                                client_id.as_str(),
+                                channel_id.as_str(),
+                                user.as_str(),
+                                reason,
+                            ])
+                            .set(0.0);
                             current_client_rejected_labels.insert([
                                 client_id.clone(),
                                 channel_id.clone(),
