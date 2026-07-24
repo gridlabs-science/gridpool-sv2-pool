@@ -120,6 +120,7 @@ pub struct GridPoolClient {
     http: reqwest::Client,
     token: Arc<String>,
     work: Arc<RwLock<WorkSelection>>,
+    last_template_tip: Arc<Mutex<Option<String>>>,
     telemetry: Arc<Mutex<HashMap<String, TelemetryAggregate>>>,
     advice: Arc<RwLock<ShareAdvice>>,
     last_pulse: Arc<Mutex<HashMap<u64, u64>>>,
@@ -150,11 +151,13 @@ impl GridPoolClient {
             parse_address(address, &work.bitcoin_network)?;
         }
 
+        let current_tip = work.current_tip_block_hash.clone();
         Ok(Self {
             config,
             http,
             token: Arc::new(token),
             work: Arc::new(RwLock::new(work)),
+            last_template_tip: Arc::new(Mutex::new(current_tip)),
             telemetry: Arc::new(Mutex::new(HashMap::new())),
             advice: Arc::new(RwLock::new(advice)),
             last_pulse: Arc::new(Mutex::new(HashMap::new())),
@@ -212,7 +215,13 @@ impl GridPoolClient {
     }
 
     pub async fn refresh_for_chain_tip(&self) -> Result<(), String> {
-        let previous_tip = self.work().current_tip_block_hash;
+        // Track the tip used for template construction separately from the polling
+        // cache. A background refresh may observe the new tip before the IPC event.
+        let previous_tip = self
+            .last_template_tip
+            .lock()
+            .expect("GridPool template tip lock poisoned")
+            .clone();
         let mut latest = None;
 
         // Bitcoin Core IPC and the GridPool node observe the same local tip through
@@ -232,6 +241,10 @@ impl GridPoolClient {
         if previous_tip.is_some() && work.current_tip_block_hash == previous_tip {
             return Err("GridPool work selection did not advance to the new chain tip".into());
         }
+        *self
+            .last_template_tip
+            .lock()
+            .expect("GridPool template tip lock poisoned") = work.current_tip_block_hash.clone();
         *self.work.write().expect("GridPool work lock poisoned") = work;
         Ok(())
     }
@@ -666,6 +679,7 @@ mod tests {
                     script_pub_key_hex: "00141ba063a60ffe85ee2034c3044d7ef087a5f20f91".into(),
                 }],
             })),
+            last_template_tip: Arc::new(Mutex::new(None)),
             telemetry: Arc::new(Mutex::new(HashMap::new())),
             advice: Arc::new(RwLock::new(ShareAdvice {
                 pulse_proofs_enabled: true,
