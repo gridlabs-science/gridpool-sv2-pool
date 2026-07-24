@@ -584,6 +584,8 @@ impl BitcoinCoreSv2TDP {
         &self,
         template_ipc_client: &BlockTemplateIpcClient,
         thread_ipc_client: ThreadIpcClient,
+        fee_threshold: i64,
+        timeout_ms: f64,
     ) -> Result<Request<WaitNextParams, WaitNextResults>, BitcoinCoreSv2TDPError> {
         let mut wait_next_request = template_ipc_client.wait_next_request();
 
@@ -603,12 +605,10 @@ impl BitcoinCoreSv2TDP {
             }
         };
 
-        wait_next_request_options.set_fee_threshold(self.fee_threshold as i64);
+        wait_next_request_options.set_fee_threshold(fee_threshold);
 
-        // 10 seconds timeout for waitNext requests
-        // please note that this is NOT how often we expect to get new templates
-        // it's just the max time we'll wait for the current waitNext request to complete
-        wait_next_request_options.set_timeout(10_000.0);
+        // This timeout only bounds the current request; it is not the template cadence.
+        wait_next_request_options.set_timeout(timeout_ms);
 
         Ok(wait_next_request)
     }

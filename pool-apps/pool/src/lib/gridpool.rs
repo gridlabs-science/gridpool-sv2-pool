@@ -211,6 +211,31 @@ impl GridPoolClient {
             .clone()
     }
 
+    pub async fn refresh_for_chain_tip(&self) -> Result<(), String> {
+        let previous_tip = self.work().current_tip_block_hash;
+        let mut latest = None;
+
+        // Bitcoin Core IPC and the GridPool node observe the same local tip through
+        // independent paths. Give the node a short window to commit its snapshot
+        // before constructing the future SV2 job.
+        for _ in 0..40 {
+            let work = fetch_work(&self.http, &self.config.node_url).await?;
+            let tip_changed = previous_tip.is_none() || work.current_tip_block_hash != previous_tip;
+            latest = Some(work);
+            if tip_changed {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+
+        let work = latest.ok_or_else(|| "GridPool returned no work selection".to_string())?;
+        if previous_tip.is_some() && work.current_tip_block_hash == previous_tip {
+            return Err("GridPool work selection did not advance to the new chain tip".into());
+        }
+        *self.work.write().expect("GridPool work lock poisoned") = work;
+        Ok(())
+    }
+
     pub fn resolve_channel(&self, identity: &str) -> Result<ChannelPayout, String> {
         let work = self.work();
         let trimmed = identity.trim();

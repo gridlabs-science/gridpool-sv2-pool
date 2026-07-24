@@ -1,7 +1,10 @@
 //! Background monitors for Bitcoin Core v30.x Sv2 Template Distribution Protocol via capnp over
 //! UNIX socket.
 
-use crate::unix_capnp::v30x::template_distribution_protocol::BitcoinCoreSv2TDP;
+use crate::{
+    MAX_MONEY, WAIT_NEXT_TIMEOUT_MS,
+    unix_capnp::v30x::template_distribution_protocol::BitcoinCoreSv2TDP,
+};
 
 use bitcoin_capnp_types_v30::capnp;
 use stratum_core::parsers_sv2::TemplateDistribution;
@@ -52,9 +55,30 @@ impl BitcoinCoreSv2TDP {
             loop {
                 debug!("monitor_ipc_templates() loop iteration start");
 
+                // Keep a waitNext request outstanding while throttling only fee-driven
+                // updates. Bitcoin Core still returns immediately for a chain-tip change.
+                let (fee_threshold, timeout_ms) = match self_clone.last_sent_template_instant {
+                    Some(last_sent) => {
+                        let elapsed_ms = last_sent.elapsed().as_millis();
+                        let min_interval_ms = self_clone.min_interval as u128 * 1_000;
+                        if elapsed_ms < min_interval_ms {
+                            let remaining_ms = (min_interval_ms - elapsed_ms) as f64;
+                            (MAX_MONEY, remaining_ms.min(WAIT_NEXT_TIMEOUT_MS))
+                        } else {
+                            (self_clone.fee_threshold as i64, WAIT_NEXT_TIMEOUT_MS)
+                        }
+                    }
+                    None => (self_clone.fee_threshold as i64, WAIT_NEXT_TIMEOUT_MS),
+                };
+
                 // Create a new request for each iteration
                 let wait_next_request = match self_clone
-                    .new_wait_next_request(&template_ipc_client, blocking_thread_ipc_client.clone())
+                    .new_wait_next_request(
+                        &template_ipc_client,
+                        blocking_thread_ipc_client.clone(),
+                        fee_threshold,
+                        timeout_ms,
+                    )
                     .await
                 {
                     Ok(wait_next_request) => wait_next_request,
@@ -176,21 +200,6 @@ impl BitcoinCoreSv2TDP {
                                     // process the stale template data after 10s
                                     self_clone.process_stale_template_data(stale_template_ids).await;
                                 } else {
-                                    // check if the minimum interval has been reached
-                                    if let Some(last_sent_template_instant) = self_clone.last_sent_template_instant {
-                                        let elapsed = last_sent_template_instant.elapsed().as_millis();
-                                        let min_interval_millis = self_clone.min_interval as u128 * 1_000;
-
-                                        // if the minimum interval has not been reached, sleep for the remaining time
-                                        if elapsed < min_interval_millis {
-                                            let sleep_duration = min_interval_millis - elapsed;
-                                            // Safe cast: min_interval is u8 (max 255), so sleep_duration is at most 255,000 ms,
-                                            // which fits comfortably in u64 (max: 18,446,744,073,709,551,615)
-                                            debug!("Sleeping for {} milliseconds to reach the minimum interval", sleep_duration);
-                                            tokio::time::sleep(std::time::Duration::from_millis(sleep_duration as u64)).await;
-                                        }
-                                    }
-
                                     info!("💹 Mempool fees increased! Sending NewTemplate message.");
                                     debug!("MEMPOOL FEE CHANGE DETECTED - sending non-future template");
 

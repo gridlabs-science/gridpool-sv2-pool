@@ -34,6 +34,16 @@ impl HandleTemplateDistributionMessagesFromServerAsync for ChannelManager {
     ) -> Result<(), Self::Error> {
         info!("Received: {}", msg);
 
+        // Template zero is the initial startup template for the already-known tip.
+        if msg.future_template && msg.template_id != 0 {
+            if let Some(gridpool) = self.gridpool.as_ref() {
+                gridpool
+                    .refresh_for_chain_tip()
+                    .await
+                    .map_err(|e| PoolError::shutdown(PoolErrorKind::Configuration(e)))?;
+            }
+        }
+
         if msg.future_template {
             self.last_future_template
                 .set(Some(msg.clone().into_static()))

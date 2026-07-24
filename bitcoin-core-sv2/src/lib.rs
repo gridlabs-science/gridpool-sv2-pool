@@ -36,3 +36,10 @@ pub mod unix_capnp;
 
 /// The minimum block reserved weight established by Bitcoin Core.
 pub const MIN_BLOCK_RESERVED_WEIGHT: u64 = 2000;
+
+/// Bitcoin Core's `MAX_MONEY` consensus constant, used to suppress fee-driven
+/// `waitNext` wakeups without suppressing chain-tip wakeups.
+const MAX_MONEY: i64 = 21_000_000 * 100_000_000;
+
+/// Maximum time an IPC `waitNext` request may block.
+const WAIT_NEXT_TIMEOUT_MS: f64 = 10_000.0;
