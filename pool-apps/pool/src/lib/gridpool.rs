@@ -22,6 +22,8 @@ use tracing::{error, info, warn};
 use crate::config::GridPoolConfig;
 
 const ADAPTER_TOKEN_HEADER: &str = "X-GridPool-Adapter-Token";
+const CHAIN_TIP_REFRESH_ATTEMPTS: usize = 100;
+const CHAIN_TIP_REFRESH_DELAY: Duration = Duration::from_millis(50);
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -227,17 +229,32 @@ impl GridPoolClient {
         // Bitcoin Core IPC and the GridPool node observe the same local tip through
         // independent paths. Give the node a short window to commit its snapshot
         // before constructing the future SV2 job.
-        for _ in 0..40 {
-            let work = fetch_work(&self.http, &self.config.node_url).await?;
-            let tip_changed = previous_tip.is_none() || work.current_tip_block_hash != previous_tip;
-            latest = Some(work);
-            if tip_changed {
-                break;
+        let mut last_error = None;
+        for attempt in 0..CHAIN_TIP_REFRESH_ATTEMPTS {
+            match fetch_work(&self.http, &self.config.node_url).await {
+                Ok(work) => {
+                    let tip_changed =
+                        previous_tip.is_none() || work.current_tip_block_hash != previous_tip;
+                    latest = Some(work);
+                    if tip_changed {
+                        break;
+                    }
+                }
+                Err(error) => {
+                    last_error = Some(error);
+                }
             }
-            tokio::time::sleep(Duration::from_millis(25)).await;
+            if attempt + 1 < CHAIN_TIP_REFRESH_ATTEMPTS {
+                tokio::time::sleep(CHAIN_TIP_REFRESH_DELAY).await;
+            }
         }
 
-        let work = latest.ok_or_else(|| "GridPool returned no work selection".to_string())?;
+        let work = latest.ok_or_else(|| {
+            format!(
+                "GridPool returned no work selection after chain-tip refresh: {}",
+                last_error.unwrap_or_else(|| "no response".into())
+            )
+        })?;
         if previous_tip.is_some() && work.current_tip_block_hash == previous_tip {
             return Err("GridPool work selection did not advance to the new chain tip".into());
         }
@@ -653,6 +670,11 @@ fn iso8601_millis(ms: u128) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{
+        io::{Read, Write},
+        net::TcpListener,
+        thread,
+    };
 
     fn client() -> GridPoolClient {
         GridPoolClient {
@@ -739,5 +761,46 @@ mod tests {
             .filter(|second| client.fee_active(&client.config.fallback_payout_address, *second))
             .count();
         assert_eq!(active, 30);
+    }
+
+    #[tokio::test]
+    async fn chain_tip_refresh_retries_temporary_work_selection_conflict() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let responses = [
+                ("409 Conflict", r#"{"error":"snapshot transition"}"#),
+                (
+                    "200 OK",
+                    r#"{"bitcoinNetwork":"mainnet","activeSnapshotId":"new-snapshot","currentTipBlockHash":"new-tip","minimumDifficultyToEnterReserve":100.0,"coinbaseOutputs":[]}"#,
+                ),
+            ];
+            for (status, body) in responses {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = [0_u8; 2048];
+                let _ = stream.read(&mut request);
+                write!(
+                    stream,
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .unwrap();
+            }
+        });
+
+        let mut client = client();
+        client.config.node_url = format!("http://{address}");
+        *client
+            .last_template_tip
+            .lock()
+            .expect("GridPool template tip lock poisoned") = Some("old-tip".into());
+
+        client.refresh_for_chain_tip().await.unwrap();
+
+        assert_eq!(
+            client.work().current_tip_block_hash.as_deref(),
+            Some("new-tip")
+        );
+        server.join().unwrap();
     }
 }
