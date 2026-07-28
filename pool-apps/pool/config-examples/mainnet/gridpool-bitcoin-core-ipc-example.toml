@@ -7,7 +7,9 @@ coinbase_reward_script = "addr(bc1qrttsncr6tmqmuhkxehe0vyrtrr6nxh2tyjmc6d)"
 server_id = 1
 pool_signature = "GridPool SV2"
 shares_per_minute = 6.0
-share_batch_size = 10
+# GridPool refreshes payout-aware jobs frequently; immediate acknowledgements
+# prevent low-hashrate firmware from replaying an unfinished response batch.
+share_batch_size = 1
 monitoring_address = "127.0.0.1:9090"
 monitoring_cache_refresh_secs = 15
 
