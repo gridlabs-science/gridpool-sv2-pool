@@ -22,7 +22,10 @@ use tracing::{error, info, warn};
 use crate::config::GridPoolConfig;
 
 const ADAPTER_TOKEN_HEADER: &str = "X-GridPool-Adapter-Token";
-const CHAIN_TIP_REFRESH_ATTEMPTS: usize = 100;
+// Snapshot transitions can briefly return 409 while the GridPool node commits
+// its boundary. Keep the SV2 process alive and wait for the authoritative work
+// selection instead of entering a supervisor restart loop.
+const CHAIN_TIP_REFRESH_ATTEMPTS: usize = 600;
 const CHAIN_TIP_REFRESH_DELAY: Duration = Duration::from_millis(50);
 
 #[derive(Clone, Debug, Deserialize)]

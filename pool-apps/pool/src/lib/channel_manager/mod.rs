@@ -16,6 +16,7 @@ use stratum_apps::{
     key_utils::{Secp256k1PublicKey, Secp256k1SecretKey},
     network_helpers::accept_noise_connection,
     stratum_core::{
+        binary_sv2::B0255,
         bitcoin::{Amount, TxOut},
         channels_sv2::{
             extranonce_manager::{bytes_needed, ExtranonceAllocator},
@@ -62,6 +63,24 @@ const POOL_LOCAL_PREFIX_BYTES: u8 = bytes_needed(POOL_MAX_CHANNELS);
 const POOL_ALLOCATION_BYTES: u8 = POOL_SERVER_BYTES + POOL_LOCAL_PREFIX_BYTES;
 const CLIENT_SEARCH_SPACE_BYTES: u8 = 16;
 pub const FULL_EXTRANONCE_SIZE: u8 = POOL_ALLOCATION_BYTES + CLIENT_SEARCH_SPACE_BYTES;
+
+fn commit_gridpool_job_refresh(
+    template: &mut NewTemplate<'static>,
+    refresh_id: u64,
+) -> Result<(), PoolErrorKind> {
+    let mut prefix = template.coinbase_prefix.to_owned_bytes();
+    prefix.push(8);
+    prefix.extend_from_slice(&refresh_id.to_le_bytes());
+    if prefix.len() > 100 {
+        return Err(PoolErrorKind::Configuration(
+            "GridPool fee job coinbase prefix exceeds consensus limit".into(),
+        ));
+    }
+    template.coinbase_prefix = B0255::try_from(prefix).map_err(|_| {
+        PoolErrorKind::Configuration("GridPool fee job coinbase prefix exceeds B0255".into())
+    })?;
+    Ok(())
+}
 
 #[derive(Clone)]
 pub struct ChannelManagerIo {
@@ -512,6 +531,10 @@ impl ChannelManager {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
+        // A fee schedule can cycle miner -> operator -> miner while the Bitcoin
+        // template is unchanged. Commit each transition into the coinbase so a
+        // new job ID can never recreate an older header search space.
+        commit_gridpool_job_refresh(&mut template, now).map_err(PoolError::shutdown)?;
         let mut messages: Vec<RouteMessageTo> = Vec::new();
 
         self.downstreams.try_for_each(|downstream_id, downstream| {
@@ -926,5 +949,51 @@ impl RouteMessageTo<'_> {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::commit_gridpool_job_refresh;
+    use stratum_apps::stratum_core::{
+        binary_sv2::{Seq0255, B0255, B064K},
+        template_distribution_sv2::NewTemplate,
+    };
+
+    fn template() -> NewTemplate<'static> {
+        NewTemplate {
+            template_id: 1,
+            future_template: false,
+            version: 0x2000_0000,
+            coinbase_tx_version: 2,
+            coinbase_prefix: B0255::try_from(vec![3, 1, 2, 3]).unwrap(),
+            coinbase_tx_input_sequence: u32::MAX,
+            coinbase_tx_value_remaining: 1,
+            coinbase_tx_outputs_count: 0,
+            coinbase_tx_outputs: B064K::try_from(Vec::new()).unwrap(),
+            coinbase_tx_locktime: 0,
+            merkle_path: Seq0255::new(Vec::new()).unwrap(),
+        }
+        .into_static()
+    }
+
+    #[test]
+    fn fee_job_refreshes_cannot_recreate_prior_work() {
+        let original = template();
+        let mut operator_slice = original.clone();
+        let mut returning_miner_slice = original.clone();
+
+        commit_gridpool_job_refresh(&mut operator_slice, 100).unwrap();
+        commit_gridpool_job_refresh(&mut returning_miner_slice, 101).unwrap();
+
+        assert_ne!(original.coinbase_prefix, operator_slice.coinbase_prefix);
+        assert_ne!(
+            operator_slice.coinbase_prefix,
+            returning_miner_slice.coinbase_prefix
+        );
+        assert_ne!(
+            original.coinbase_prefix,
+            returning_miner_slice.coinbase_prefix
+        );
     }
 }
