@@ -35,7 +35,14 @@ impl HandleTemplateDistributionMessagesFromServerAsync for ChannelManager {
         info!("Received: {}", msg);
 
         // Template zero is the initial startup template for the already-known tip.
-        if msg.future_template && msg.template_id != 0 {
+        // The first future template bootstraps the channel manager for the
+        // already-known Bitcoin tip. Only later future templates represent a
+        // tip transition that needs GridPool to refresh its work selection.
+        let has_bootstrap_template = self
+            .last_future_template
+            .with(|template| template.is_some())
+            .map_err(PoolError::shutdown)?;
+        if msg.future_template && msg.template_id != 0 && has_bootstrap_template {
             if let Some(gridpool) = self.gridpool.as_ref() {
                 gridpool
                     .refresh_for_chain_tip()
