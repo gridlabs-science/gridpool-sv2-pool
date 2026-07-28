@@ -96,6 +96,85 @@ pub enum TemplateProviderType {
         fee_threshold: u64,
         min_interval: u8,
     },
+    /// Builds Template Distribution messages from the standard Bitcoin JSON-RPC mining API.
+    ///
+    /// This backend intentionally targets the common `getblocktemplate` / `submitblock`
+    /// contract rather than a specific node implementation. It is the compatibility path for
+    /// Bitcoin Knots, older Bitcoin Core releases, and appliance boundaries that cannot expose
+    /// a UNIX IPC socket.
+    BitcoinJsonRpc {
+        url: String,
+        #[serde(default)]
+        username: Option<String>,
+        #[serde(default)]
+        password: Option<String>,
+        #[serde(default, deserialize_with = "opt_path_from_toml")]
+        cookie_file: Option<PathBuf>,
+        #[serde(default = "default_rpc_timeout_seconds")]
+        timeout_seconds: u64,
+        #[serde(default = "default_rpc_retry_seconds")]
+        retry_seconds: u64,
+        #[serde(default = "default_rpc_min_interval_seconds")]
+        min_interval: u8,
+    },
+    /// Prefers Bitcoin Core IPC when its socket is reachable, otherwise uses JSON-RPC.
+    ///
+    /// `version` is optional so the same configuration can be used with Bitcoin Knots. When it
+    /// is absent, or when the resolved IPC socket cannot be opened, the RPC fields are used.
+    BitcoinAuto {
+        #[serde(
+            default,
+            deserialize_with = "deserialize_optional_bitcoin_core_version"
+        )]
+        version: Option<BitcoinCoreVersion>,
+        network: BitcoinNetwork,
+        #[serde(default, deserialize_with = "opt_path_from_toml")]
+        data_dir: Option<PathBuf>,
+        fee_threshold: u64,
+        min_interval: u8,
+        rpc_url: String,
+        #[serde(default)]
+        rpc_username: Option<String>,
+        #[serde(default)]
+        rpc_password: Option<String>,
+        #[serde(default, deserialize_with = "opt_path_from_toml")]
+        rpc_cookie_file: Option<PathBuf>,
+        #[serde(default = "default_rpc_timeout_seconds")]
+        rpc_timeout_seconds: u64,
+        #[serde(default = "default_rpc_retry_seconds")]
+        rpc_retry_seconds: u64,
+    },
+}
+
+fn default_rpc_timeout_seconds() -> u64 {
+    90
+}
+
+fn default_rpc_retry_seconds() -> u64 {
+    2
+}
+
+fn default_rpc_min_interval_seconds() -> u8 {
+    1
+}
+
+#[cfg(feature = "bitcoin-core-sv2")]
+fn deserialize_optional_bitcoin_core_version<'de, D>(
+    deserializer: D,
+) -> Result<Option<BitcoinCoreVersion>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let major = <Option<u8> as serde::Deserialize>::deserialize(deserializer)?;
+    major
+        .map(|value| {
+            BitcoinCoreVersion::try_from(value).map_err(|unsupported| {
+                serde::de::Error::custom(format!(
+                    "unsupported Bitcoin Core IPC version: {unsupported}. expected 30 or 31"
+                ))
+            })
+        })
+        .transpose()
 }
 
 #[cfg(test)]

@@ -1,0 +1,36 @@
+# Native deployments may prefer IPC while retaining an automatic RPC fallback.
+# Remove `version` when the attached node is Bitcoin Knots.
+
+authority_public_key = "REPLACE_WITH_SECP256K1_PUBLIC_KEY"
+authority_secret_key = "REPLACE_WITH_SECP256K1_SECRET_KEY"
+cert_validity_sec = 3600
+listen_address = "0.0.0.0:34265"
+coinbase_reward_script = "addr(REPLACE_WITH_BITCOIN_ADDRESS)"
+server_id = 1
+pool_signature = "GridPool Native SV2"
+shares_per_minute = 6.0
+share_batch_size = 10
+monitoring_address = "127.0.0.1:34290"
+monitoring_cache_refresh_secs = 15
+
+[gridpool]
+node_url = "http://127.0.0.1:5000"
+fallback_payout_address = "REPLACE_WITH_BITCOIN_ADDRESS"
+operator_fee_percent = 0.0
+adapter_token_file = "/data/gridpool-adapter.token"
+proof_spool_dir = "/data/proof-spool"
+refresh_seconds = 10
+telemetry_flush_seconds = 5
+fee_cycle_seconds = 1500
+
+[template_provider_type.BitcoinAuto]
+version = 31
+network = "mainnet"
+data_dir = "/home/bitcoin/.bitcoin"
+fee_threshold = 100
+min_interval = 5
+rpc_url = "http://127.0.0.1:8332"
+rpc_username = "REPLACE_WITH_RPC_USERNAME"
+rpc_password = "REPLACE_WITH_RPC_PASSWORD"
+rpc_timeout_seconds = 90
+rpc_retry_seconds = 2

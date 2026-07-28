@@ -35,6 +35,7 @@ use crate::{
     error::PoolErrorKind,
     template_receiver::{
         bitcoin_core::{connect_to_bitcoin_core, BitcoinCoreSv2TDPConfig},
+        bitcoin_rpc::{BitcoinRpcConfig, BitcoinRpcTemplateProvider},
         sv2_tp::Sv2Tp,
     },
 };
@@ -277,11 +278,13 @@ impl PoolRuntime<IoReady> {
                             Err(err) => return Err((PoolErrorKind::Jds(err), self)),
                         }
                     }
-                    TemplateProviderType::Sv2Tp { .. } => {
+                    TemplateProviderType::Sv2Tp { .. }
+                    | TemplateProviderType::BitcoinJsonRpc { .. }
+                    | TemplateProviderType::BitcoinAuto { .. } => {
                         return Err((
                             PoolErrorKind::Configuration(
                                 "[jds] requires template_provider_type = BitcoinCoreIpc \
-                                                     (JDS needs direct IPC access to Bitcoin Core)"
+                                 (JDS needs direct IPC access to Bitcoin Core)"
                                     .to_string(),
                             ),
                             self,
@@ -457,6 +460,108 @@ impl PoolRuntime<JdsReady> {
                     .await,
                     cancellation_token: bitcoin_core_cancellation_token,
                 });
+            }
+            TemplateProviderType::BitcoinJsonRpc {
+                url,
+                username,
+                password,
+                cookie_file,
+                timeout_seconds,
+                retry_seconds,
+                min_interval,
+            } => {
+                let provider = match BitcoinRpcTemplateProvider::new(
+                    BitcoinRpcConfig {
+                        url,
+                        username,
+                        password,
+                        cookie_file,
+                        timeout_seconds,
+                        retry_seconds,
+                        min_interval,
+                    },
+                    self.state.io.channel_manager_to_tp_receiver.clone(),
+                    self.state.io.tp_to_channel_manager_sender.clone(),
+                    cancellation_token.clone(),
+                ) {
+                    Ok(provider) => provider,
+                    Err(error) => {
+                        return Err((PoolErrorKind::Configuration(error), self));
+                    }
+                };
+                provider.start(self.task_manager.clone());
+                info!("Bitcoin JSON-RPC Template Provider setup done");
+            }
+            TemplateProviderType::BitcoinAuto {
+                version,
+                network,
+                data_dir,
+                fee_threshold,
+                min_interval,
+                rpc_url,
+                rpc_username,
+                rpc_password,
+                rpc_cookie_file,
+                rpc_timeout_seconds,
+                rpc_retry_seconds,
+            } => {
+                let ipc_socket =
+                    stratum_apps::tp_type::resolve_ipc_socket_path(&network, data_dir.clone());
+                let ipc_ready = ipc_socket
+                    .as_ref()
+                    .is_some_and(|socket| std::os::unix::net::UnixStream::connect(socket).is_ok());
+
+                if let (Some(version), Some(unix_socket_path), true) =
+                    (version, ipc_socket, ipc_ready)
+                {
+                    info!(
+                        "BitcoinAuto selected Core IPC at {}",
+                        unix_socket_path.display()
+                    );
+                    let bitcoin_core_cancellation_token = CancellationToken::new();
+                    let bitcoin_core_config = BitcoinCoreSv2TDPConfig {
+                        version,
+                        unix_socket_path,
+                        fee_threshold,
+                        min_interval,
+                        incoming_tdp_receiver: self.state.io.channel_manager_to_tp_receiver.clone(),
+                        outgoing_tdp_sender: self.state.io.tp_to_channel_manager_sender.clone(),
+                        cancellation_token: bitcoin_core_cancellation_token.clone(),
+                    };
+                    bitcoin_core_sv2 = Some(BitcoinCoreSv2Handle {
+                        join_handle: connect_to_bitcoin_core(
+                            bitcoin_core_config,
+                            cancellation_token.clone(),
+                            self.task_manager.clone(),
+                        )
+                        .await,
+                        cancellation_token: bitcoin_core_cancellation_token,
+                    });
+                } else {
+                    info!(
+                        "BitcoinAuto selected JSON-RPC because compatible Core IPC is unavailable"
+                    );
+                    let provider = match BitcoinRpcTemplateProvider::new(
+                        BitcoinRpcConfig {
+                            url: rpc_url,
+                            username: rpc_username,
+                            password: rpc_password,
+                            cookie_file: rpc_cookie_file,
+                            timeout_seconds: rpc_timeout_seconds,
+                            retry_seconds: rpc_retry_seconds,
+                            min_interval,
+                        },
+                        self.state.io.channel_manager_to_tp_receiver.clone(),
+                        self.state.io.tp_to_channel_manager_sender.clone(),
+                        cancellation_token.clone(),
+                    ) {
+                        Ok(provider) => provider,
+                        Err(error) => {
+                            return Err((PoolErrorKind::Configuration(error), self));
+                        }
+                    };
+                    provider.start(self.task_manager.clone());
+                }
             }
         }
 

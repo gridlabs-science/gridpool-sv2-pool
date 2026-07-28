@@ -1,0 +1,32 @@
+# Canonical GridPool SV2 configuration for Bitcoin Knots, older Bitcoin Core,
+# and appliance deployments where the Bitcoin node is reached over the network.
+
+authority_public_key = "REPLACE_WITH_SECP256K1_PUBLIC_KEY"
+authority_secret_key = "REPLACE_WITH_SECP256K1_SECRET_KEY"
+cert_validity_sec = 3600
+listen_address = "0.0.0.0:34265"
+coinbase_reward_script = "addr(REPLACE_WITH_BITCOIN_ADDRESS)"
+server_id = 1
+pool_signature = "GridPool Native SV2"
+shares_per_minute = 6.0
+share_batch_size = 10
+monitoring_address = "127.0.0.1:34290"
+monitoring_cache_refresh_secs = 15
+
+[gridpool]
+node_url = "http://127.0.0.1:5000"
+fallback_payout_address = "REPLACE_WITH_BITCOIN_ADDRESS"
+operator_fee_percent = 0.0
+adapter_token_file = "/data/gridpool-adapter.token"
+proof_spool_dir = "/data/proof-spool"
+refresh_seconds = 10
+telemetry_flush_seconds = 5
+fee_cycle_seconds = 1500
+
+[template_provider_type.BitcoinJsonRpc]
+url = "http://bitcoin-node:8332"
+username = "REPLACE_WITH_RPC_USERNAME"
+password = "REPLACE_WITH_RPC_PASSWORD"
+timeout_seconds = 90
+retry_seconds = 2
+min_interval = 5

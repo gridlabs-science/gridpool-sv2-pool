@@ -243,6 +243,17 @@ impl JobDeclaratorClient {
                     .await,
                 );
             }
+            TemplateProviderType::BitcoinJsonRpc { .. }
+            | TemplateProviderType::BitcoinAuto { .. } => {
+                error!(
+                    "BitcoinJsonRpc and BitcoinAuto are standalone pool template providers; \
+                     the Job Declarator Client requires Sv2Tp or BitcoinCoreIpc"
+                );
+                self.cancellation_token.cancel();
+                self.shutdown_notify.notify_waiters();
+                self.is_alive.store(false, Ordering::Relaxed);
+                return;
+            }
         }
 
         let mut upstream_addresses: Vec<_> = self

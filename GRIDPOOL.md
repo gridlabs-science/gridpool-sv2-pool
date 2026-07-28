@@ -4,7 +4,8 @@ This repository is a minimal fork of the SRI Pool role from `sv2-apps` v0.6.0. I
 earlier GridPool JDC/JDS sidecar experiment with a direct architecture:
 
 ```text
-SV2 miner/proxy -> gridpool-sv2-pool -> Bitcoin Core IPC
+SV2 miner/proxy -> gridpool-sv2-pool -> Bitcoin Core IPC (preferred)
+                         |             -> Bitcoin JSON-RPC (compatible fallback)
                          |
                          +-> local GridPool node HTTP API
 ```
@@ -25,10 +26,27 @@ GridPool payout changes and fee-boundary changes generate channel-specific repla
 stock SRI Template Provider solution path remains independent of GridPool HTTP availability, so a
 Bitcoin block is still submitted directly to the operator's Bitcoin Core node.
 
-Start with
-`pool-apps/pool/config-examples/mainnet/gridpool-bitcoin-core-ipc-example.toml`. The GridPool node
-and this process must share the generated local adapter token file. This fork requires Bitcoin Core
-30.2+ IPC in the same way as current SRI Pool.
+The GridPool node and this process must share the generated local adapter token file. Select one
+template backend:
+
+- `gridpool-bitcoin-core-ipc-example.toml` uses the lowest-latency Bitcoin Core 30/31 IPC path.
+- `gridpool-bitcoin-rpc-example.toml` uses standard `getblocktemplate` and `submitblock`, supporting
+  Bitcoin Knots, older Bitcoin Core, Docker networks, Umbrel, and StartOS.
+- `gridpool-bitcoin-auto-example.toml` probes the configured IPC socket at startup and falls back
+  to RPC when IPC is unavailable.
+
+The RPC path uses GBT long polling for prompt template refreshes. Because the standard RPC does not
+offer Core IPC's dynamic coinbase-weight reservation, it reserves room for the GridPool payout
+suffix by removing only a low-priority transaction suffix when required, then recomputes the
+coinbase merkle path and BIP141 witness commitment. A solved block is reconstructed and submitted
+directly to the attached node with `submitblock`.
+
+The RPC path was exercised against Bitcoin Core 31 using a live mainnet
+`getblocktemplate` response and followed a subsequent chain-tip transition.
+Bitcoin Knots and older Core releases use the same standard mining RPC
+contract. Appliance packages therefore use RPC by default; native operators
+may select `BitcoinAuto` to prefer Core 31 IPC and fall back to RPC when the
+socket is unavailable.
 
 The public-beta example uses a 2% operator fee implemented as deterministic, staggered work slices.
 It does not alter GridPool consensus payouts. Operators may set `operator_fee_percent = 0` for a

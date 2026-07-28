@@ -58,7 +58,7 @@ RUN echo "Building ${APP}" && \
 FROM debian:bookworm-slim AS runtime
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gettext-base && \
+    ca-certificates gettext-base && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
