@@ -5,7 +5,10 @@
 use clap::Parser;
 use ext_config::{Config, File, FileFormat};
 use pool_sv2::config::PoolConfig;
+use rand::rngs::OsRng;
+use secp256k1::SecretKey;
 use std::path::PathBuf;
+use stratum_apps::key_utils::{Secp256k1PublicKey, Secp256k1SecretKey};
 
 /// Holds the parsed CLI arguments for the Pool binary.
 #[derive(Parser, Debug)]
@@ -24,12 +27,25 @@ pub struct Args {
         help = "Path to the log file. If not set, logs will only be written to stdout."
     )]
     pub log_file: Option<PathBuf>,
+    #[arg(
+        long,
+        help = "Generate a fresh SV2 authority keypair and exit without loading a config"
+    )]
+    pub generate_authority_keypair: bool,
 }
 
 #[cfg_attr(not(test), hotpath::measure)]
 /// Parses CLI arguments and loads the PoolConfig from the specified file.
-pub fn process_cli_args() -> PoolConfig {
+pub fn process_cli_args() -> Option<PoolConfig> {
     let args = Args::parse();
+    if args.generate_authority_keypair {
+        let secret = Secp256k1SecretKey(SecretKey::new(&mut OsRng));
+        let public = Secp256k1PublicKey::from(secret);
+        println!("authority_public_key={public}");
+        println!("authority_secret_key={secret}");
+        return None;
+    }
+
     let config_path = args.config_path.to_str().expect("Invalid config path");
     let mut config: PoolConfig = Config::builder()
         .add_source(File::new(config_path, FileFormat::Toml))
@@ -39,5 +55,5 @@ pub fn process_cli_args() -> PoolConfig {
 
     config.set_log_dir(args.log_file);
 
-    config
+    Some(config)
 }

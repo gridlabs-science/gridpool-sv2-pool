@@ -19,7 +19,9 @@ async fn main() {
 
 #[cfg_attr(not(test), hotpath::main(limit = 0))]
 async fn inner_main() {
-    let config = process_cli_args();
+    let Some(config) = process_cli_args() else {
+        return;
+    };
     init_logging(config.log_dir());
     if let Err(e) = PoolSv2::new(config).start().await {
         tracing::error!("Pool Error'ed out: {e}");
