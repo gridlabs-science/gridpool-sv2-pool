@@ -600,6 +600,12 @@ impl RpcTemplate {
                     .map_err(|error| format!("invalid GBT coinbaseaux.flags: {error}"))?,
             );
         }
+        // Long-poll responses can carry a new template ID without changing any
+        // header-affecting GBT field. Give every published RPC template distinct
+        // work so standard-channel firmware cannot replay an old solution under
+        // the new job ID and have it appear as a duplicate share.
+        coinbase_prefix.push(8);
+        coinbase_prefix.extend_from_slice(&id.to_le_bytes());
         if coinbase_prefix.len() > 100 {
             return Err("GBT coinbase script prefix exceeds consensus limit".to_string());
         }
@@ -823,5 +829,38 @@ mod tests {
             serde_json::from_str(r#"{"result":null,"error":null,"id":1}"#).unwrap();
         let result: Option<String> = serde_json::from_value(envelope.result).unwrap();
         assert_eq!(result, None);
+    }
+
+    #[test]
+    fn rpc_template_id_makes_republished_work_unique() {
+        let gbt = GetBlockTemplate {
+            version: 0x2000_0000,
+            previousblockhash: "00".repeat(32),
+            transactions: vec![],
+            coinbaseaux: CoinbaseAux::default(),
+            coinbasevalue: 312_500_000,
+            longpollid: Some("same-work-new-longpoll".to_string()),
+            mintime: 1_700_000_000,
+            curtime: 1_700_000_001,
+            bits: "17023ad4".to_string(),
+            height: 960_000,
+        };
+        let constraints = CoinbaseOutputConstraints {
+            coinbase_output_max_additional_size: 1_024,
+            coinbase_output_max_additional_sigops: 0,
+        };
+
+        let first = RpcTemplate::from_gbt(41, gbt.clone(), &constraints).unwrap();
+        let second = RpcTemplate::from_gbt(42, gbt, &constraints).unwrap();
+
+        assert_ne!(first.coinbase_prefix, second.coinbase_prefix);
+        assert_eq!(
+            &first.coinbase_prefix[first.coinbase_prefix.len() - 8..],
+            &41_u64.to_le_bytes()
+        );
+        assert_eq!(
+            &second.coinbase_prefix[second.coinbase_prefix.len() - 8..],
+            &42_u64.to_le_bytes()
+        );
     }
 }
