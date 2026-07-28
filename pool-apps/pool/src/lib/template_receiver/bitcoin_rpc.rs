@@ -73,8 +73,8 @@ struct RpcClient {
 }
 
 #[derive(Debug, Deserialize)]
-struct RpcEnvelope<T> {
-    result: Option<T>,
+struct RpcEnvelope {
+    result: Value,
     error: Option<RpcError>,
 }
 
@@ -205,7 +205,7 @@ impl RpcClient {
             .bytes()
             .await
             .map_err(|error| format!("Bitcoin RPC {method} response read failure: {error}"))?;
-        let envelope: RpcEnvelope<T> = serde_json::from_slice(&body).map_err(|error| {
+        let envelope: RpcEnvelope = serde_json::from_slice(&body).map_err(|error| {
             format!("Bitcoin RPC {method} returned HTTP {status} with invalid JSON: {error}")
         })?;
 
@@ -215,9 +215,8 @@ impl RpcClient {
                 rpc_error.code, rpc_error.message
             ));
         }
-        envelope
-            .result
-            .ok_or_else(|| format!("Bitcoin RPC {method} returned HTTP {status} without a result"))
+        serde_json::from_value(envelope.result)
+            .map_err(|error| format!("Bitcoin RPC {method} returned an invalid result: {error}"))
     }
 
     async fn get_block_template(
@@ -816,5 +815,13 @@ mod tests {
             &output.script_pubkey.as_bytes()[..6],
             &[0x6a, 0x24, 0xaa, 0x21, 0xa9, 0xed]
         );
+    }
+
+    #[test]
+    fn rpc_null_result_deserializes_as_successful_optional_value() {
+        let envelope: RpcEnvelope =
+            serde_json::from_str(r#"{"result":null,"error":null,"id":1}"#).unwrap();
+        let result: Option<String> = serde_json::from_value(envelope.result).unwrap();
+        assert_eq!(result, None);
     }
 }
