@@ -12,6 +12,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use stratum_apps::stratum_core::bitcoin::{
@@ -25,7 +26,7 @@ const ADAPTER_TOKEN_HEADER: &str = "X-GridPool-Adapter-Token";
 // Snapshot transitions can briefly return 409 while the GridPool node commits
 // its boundary. Keep the SV2 process alive and wait for the authoritative work
 // selection instead of entering a supervisor restart loop.
-const CHAIN_TIP_REFRESH_ATTEMPTS: usize = 600;
+const CHAIN_TIP_REFRESH_WARNING_ATTEMPTS: usize = 600;
 const CHAIN_TIP_REFRESH_DELAY: Duration = Duration::from_millis(50);
 
 #[derive(Clone, Debug, Deserialize)]
@@ -220,6 +221,13 @@ impl GridPoolClient {
     }
 
     pub async fn refresh_for_chain_tip(&self) -> Result<(), String> {
+        self.refresh_for_chain_tip_with_limit(None).await
+    }
+
+    async fn refresh_for_chain_tip_with_limit(
+        &self,
+        attempt_limit: Option<usize>,
+    ) -> Result<(), String> {
         // Track the tip used for template construction separately from the polling
         // cache. A background refresh may observe the new tip before the IPC event.
         let previous_tip = self
@@ -230,10 +238,12 @@ impl GridPoolClient {
         let mut latest = None;
 
         // Bitcoin Core IPC and the GridPool node observe the same local tip through
-        // independent paths. Give the node a short window to commit its snapshot
-        // before constructing the future SV2 job.
+        // independent paths. GridPool can intentionally withhold work while its
+        // attached node reconciles. Keep downstream sessions alive and wait for the
+        // authoritative payout plan rather than restarting the entire SV2 process.
         let mut last_error = None;
-        for attempt in 0..CHAIN_TIP_REFRESH_ATTEMPTS {
+        let mut attempt = 0_usize;
+        loop {
             match fetch_work(&self.http, &self.config.node_url).await {
                 Ok(work) => {
                     let tip_changed =
@@ -247,9 +257,22 @@ impl GridPoolClient {
                     last_error = Some(error);
                 }
             }
-            if attempt + 1 < CHAIN_TIP_REFRESH_ATTEMPTS {
-                tokio::time::sleep(CHAIN_TIP_REFRESH_DELAY).await;
+
+            attempt += 1;
+            if let Some(limit) = attempt_limit {
+                if attempt >= limit {
+                    break;
+                }
             }
+            if attempt % CHAIN_TIP_REFRESH_WARNING_ATTEMPTS == 0 {
+                warn!(
+                    attempts = attempt,
+                    previous_tip = previous_tip.as_deref().unwrap_or("unknown"),
+                    error = last_error.as_deref().unwrap_or("tip has not advanced"),
+                    "GridPool work remains unavailable during chain-tip reconciliation; keeping SV2 sessions connected"
+                );
+            }
+            tokio::time::sleep(CHAIN_TIP_REFRESH_DELAY).await;
         }
 
         let work = latest.ok_or_else(|| {
@@ -517,7 +540,7 @@ impl GridPoolClient {
                 continue;
             };
             let Ok(proof) = serde_json::from_slice::<ShareSubmission>(&bytes) else {
-                error!(path = %path.display(), "Invalid proof in GridPool spool");
+                self.quarantine_spooled_proof(&path, "invalid-json").await;
                 continue;
             };
             self.submit_spooled_proof(&path, &proof).await;
@@ -541,11 +564,51 @@ impl GridPoolClient {
             Ok(response) => {
                 let status = response.status();
                 let body = response.text().await.unwrap_or_default();
-                error!(%status, %body, "GridPool rejected spooled SV2 proof");
+                if is_permanent_proof_rejection(status) {
+                    error!(%status, %body, "GridPool permanently rejected spooled SV2 proof; quarantining");
+                    self.quarantine_spooled_proof(path, &format!("http-{}", status.as_u16()))
+                        .await;
+                } else {
+                    warn!(%status, %body, "GridPool temporarily rejected spooled SV2 proof; retaining for retry");
+                }
             }
             Err(e) => error!(error = %e, "Failed to submit spooled SV2 proof"),
         }
     }
+
+    async fn quarantine_spooled_proof(&self, path: &std::path::Path, reason: &str) {
+        let rejected_dir = proof_spool_dir(&self.config).join("rejected");
+        if let Err(error) = tokio::fs::create_dir_all(&rejected_dir).await {
+            error!(%error, path = %path.display(), "Failed to create rejected GridPool proof directory");
+            return;
+        }
+        let file_name = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("proof.json");
+        let destination = rejected_dir.join(format!("{}-{}-{}", now_millis(), reason, file_name));
+        match tokio::fs::rename(path, &destination).await {
+            Ok(()) => warn!(
+                path = %path.display(),
+                destination = %destination.display(),
+                %reason,
+                "Quarantined non-retryable GridPool proof"
+            ),
+            Err(error) => error!(
+                %error,
+                path = %path.display(),
+                destination = %destination.display(),
+                "Failed to quarantine GridPool proof"
+            ),
+        }
+    }
+}
+
+fn is_permanent_proof_rejection(status: StatusCode) -> bool {
+    matches!(
+        status,
+        StatusCode::BAD_REQUEST | StatusCode::UNPROCESSABLE_ENTITY
+    )
 }
 
 async fn fetch_work(http: &reqwest::Client, base: &str) -> Result<WorkSelection, String> {
@@ -798,12 +861,30 @@ mod tests {
             .lock()
             .expect("GridPool template tip lock poisoned") = Some("old-tip".into());
 
-        client.refresh_for_chain_tip().await.unwrap();
+        client
+            .refresh_for_chain_tip_with_limit(Some(10))
+            .await
+            .unwrap();
 
         assert_eq!(
             client.work().current_tip_block_hash.as_deref(),
             Some("new-tip")
         );
         server.join().unwrap();
+    }
+
+    #[test]
+    fn permanent_proof_rejections_are_quarantined() {
+        assert!(is_permanent_proof_rejection(StatusCode::BAD_REQUEST));
+        assert!(is_permanent_proof_rejection(
+            StatusCode::UNPROCESSABLE_ENTITY
+        ));
+        assert!(!is_permanent_proof_rejection(StatusCode::CONFLICT));
+        assert!(!is_permanent_proof_rejection(StatusCode::UNAUTHORIZED));
+        assert!(!is_permanent_proof_rejection(StatusCode::NOT_FOUND));
+        assert!(!is_permanent_proof_rejection(StatusCode::TOO_MANY_REQUESTS));
+        assert!(!is_permanent_proof_rejection(
+            StatusCode::INTERNAL_SERVER_ERROR
+        ));
     }
 }
